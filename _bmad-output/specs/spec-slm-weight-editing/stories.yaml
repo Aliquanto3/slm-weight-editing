@@ -1,0 +1,31 @@
+- id: "1"
+  title: Report de l'édition du MIT dans le GGUF officiel de qwen3.5:0.8b
+  description: >-
+    Outil qui remplace les tenseurs édités d'un checkpoint HF dans le GGUF Ollama officiel,
+    requantifiés en Q8_0 après contrôle de fidélité bit à bit, avec vérification des sha256 des
+    deux tenseurs de RikiyaT et un Modelfile repris de l'officiel (SPEC CAP-1, CAP-2, CAP-3).
+  spec_checkpoint: false
+  done_checkpoint: false
+  invoke_dev_with: >-
+    Dépôt slm-weight-editing. Tag du modèle édité : qwen3.5-wsp:0.8b. Tenseurs, sha256 et
+    révision de base dans reference-mit.md ; correspondance de noms HF vers GGUF
+    (model.language_model.layers.N.mlp.down_proj.weight vers blk.N.ffn_down.weight) et
+    ordre des dimensions à vérifier sur le GGUF, pas à supposer. Le GGUF officiel se lit par le
+    manifeste local d'Ollama (renderer, parser, paramètres, blob), en lecture seule ; ne lancer ni
+    ollama ni téléchargement dans les tests (tenseurs synthétiques, GGUF minimal écrit par le
+    test). Contrôle de fidélité en échec : aucun GGUF écrit, rapport de l'écart. Sorties sous
+    models/ (ignoré par git). Documenter dans le README la commande ollama create qu'Anaël lancera.
+- id: "2"
+  title: Campagne wsp-20261104 dans slm-quality-bench
+  description: >-
+    Dans slm-quality-bench, entrée qwen3.5-wsp:0.8b dans models.yaml et campagne wsp-20261104
+    qui mesure qwen3.5:0.8b et le modèle édité avec les réglages de lfm3-20261029 (SPEC CAP-4,
+    chaine-et-lots.md).
+  spec_checkpoint: false
+  done_checkpoint: false
+  invoke_dev_with: >-
+    Dépôt slm-quality-bench, pas slm-weight-editing : mettre main à jour (le clone local a
+    10 commits de retard) et ouvrir une branche et une PR dans ce dépôt. Calquer la campagne et son
+    test sur lfm3-20261029 (test_lfm3_campaign_shares_the_flint_settings_with_two_models) et
+    l'entrée de qwen3.5:0.8b sur celle de full-20261018. Digest et capacités du modèle édité
+    marqués à confirmer par precheck, comme lfm3 ; ne lancer ni ollama, ni precheck, ni generate.
