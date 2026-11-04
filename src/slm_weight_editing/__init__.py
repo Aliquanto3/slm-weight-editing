@@ -10,6 +10,7 @@ __version__ = "0.0.0"
 
 
 def _parser() -> argparse.ArgumentParser:
+    from slm_weight_editing import harness
     from slm_weight_editing.q8_0 import INTERMEDIATES
     from slm_weight_editing.report_gguf import WSP_SOURCE_MODEL, WSP_TAG
 
@@ -45,6 +46,7 @@ def _parser() -> argparse.ArgumentParser:
     from slm_weight_editing.compare_edits import add_parser
 
     add_parser(sub)
+    harness.add_parser(sub)
     return parser
 
 
