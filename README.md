@@ -53,3 +53,13 @@ L'outil remplace dans le GGUF officiel de `qwen3.5:0.8b` (Q8_0) les deux tenseur
 ## Licence
 
 Code sous Apache 2.0. Les modèles édités gardent la licence de leur modèle d'origine.
+
+## Comparer deux éditions
+
+```
+uv run slm-weight-editing compare-edits --original <orig> --edit-a <edition-a> --edit-b <edition-b> \
+  [--label-a Claude --label-b MIT] [--summary a/summary.json [--summary b/summary.json]] \
+  [--tag-a <tag> --tag-b <tag>] [--out models/comparaison-editions/rapport.md]
+```
+
+Les checkpoints sont des fichiers ou dossiers safetensors du même original (mêmes noms, formes et dtypes, sinon erreur et code 1). Le rapport Markdown et un JSON des chiffres (même nom, extension `.json`) donnent les tenseurs touchés (communs, propres à chacun, nombre et part des poids modifiés), le cosinus des deltas et celui de leurs directions principales (SVD, valeur absolue). Avec un ou deux `summary.json` de `slm-quality-bench`, il ajoute l'écart de score et de taux tronqué par piste et par catégorie, avec un intervalle à 95 % (Wilson, puis Newcombe pour l'écart, modèles traités comme indépendants). Un seul résumé contenant les deux modèles se sélectionne par `--tag-a` et `--tag-b`. Le rapport ne reprend ni question, ni réponse, ni chemin.

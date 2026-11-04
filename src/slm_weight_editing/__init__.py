@@ -42,6 +42,9 @@ def _parser() -> argparse.ArgumentParser:
         default="f32",
         help="passage bf16 -> fXX avant Q8_0 (défaut f32, comme llama.cpp)",
     )
+    from slm_weight_editing.compare_edits import add_parser
+
+    add_parser(sub)
     return parser
 
 
@@ -52,6 +55,8 @@ def default_out_dir(tag: str) -> str:
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     args = _parser().parse_args(argv)
+    if getattr(args, "func", None):
+        return args.func(args)
     from slm_weight_editing.gguf_file import GGUFError
     from slm_weight_editing.ollama_store import OllamaStoreError
     from slm_weight_editing.report_gguf import FidelityError, ReportError, report_gguf
