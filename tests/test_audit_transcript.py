@@ -20,7 +20,7 @@ REPO = Path(__file__).resolve().parents[1]
 REPO_POSIX = REPO.as_posix()
 # Espace de séance fictif (jamais créé) : seul son chemin sert à l'audit.
 WS = (Path.home() / "seances" / "s1-audit").resolve()
-UV = f"uv run --project {REPO_POSIX} slm-weight-editing"
+UV = "uv run slm-weight-editing"
 WORK = "sessions/s1/work/model.safetensors"
 CLEAN_SCRIPT = f"""import numpy as np
 import safetensors.numpy as stn
@@ -93,6 +93,17 @@ def write_transcript(path: Path, calls: list[tuple[str, dict]]) -> Path:
         )
     path.write_text("\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
     return path
+
+
+@pytest.fixture(autouse=True)
+def _fictional_workspace_settings(monkeypatch):
+    """WS n'existe pas : ses réglages (env.UV_PROJECT) sont lus ailleurs sur disque, hors dépôt."""
+    real = audit._settings_uv_project
+
+    def fake(workspace: Path) -> str | None:
+        return audit._norm_path(REPO_POSIX) if workspace == WS else real(workspace)
+
+    monkeypatch.setattr(audit, "_settings_uv_project", fake)
 
 
 def rules(violations) -> set[str]:
@@ -361,7 +372,7 @@ SCENARIOS = [
     # 3. python hors du lanceur
     ("Bash", {"command": "uv run python scripts/edit.py"}, "python-hors-lanceur"),
     ("PowerShell", {"command": "python scripts\\edit.py"}, "python-hors-lanceur"),
-    ("Bash", {"command": f"uv run --project {REPO_POSIX} python x.py"}, "python-hors-lanceur"),
+    ("Bash", {"command": "uv run python x.py"}, "python-hors-lanceur"),
     # 4. variable d'environnement en tête
     ("Bash", {"command": f"PYTHONPATH=sessions/s1/work {RUN_BATCH}"}, "environnement"),
     ("PowerShell", {"command": f"$env:PYTHONPATH = 'w'; {RUN_BATCH}"}, "environnement"),
@@ -377,6 +388,16 @@ SCENARIOS = [
     (
         "Bash",
         {"command": "uv run --project C:/autre slm-weight-editing run-batch --session s1"},
+        "commande-hors-liste",
+    ),
+    (
+        "Bash",
+        {"command": f"uv run --project {REPO_POSIX} slm-weight-editing run-batch --session s1"},
+        "commande-hors-liste",
+    ),
+    (
+        "PowerShell",
+        {"command": "uv run --directory C:/autre slm-weight-editing run-batch --session s1"},
         "commande-hors-liste",
     ),
     ("Bash", {"command": f"{UV} run-batch --session s1 > sessions/s1/x"}, "commande-hors-liste"),
@@ -406,11 +427,11 @@ def test_second_opinion_scenarios(tmp_path, name, tool_input, rule):
 
 
 def test_path_ending_with_repo_name_is_not_the_cli():
-    # Scénario 10 : `--project .../slm-weight-editing` ne compte pas comme une sous-commande.
+    # Scénario 10 : `UV_PROJECT=.../slm-weight-editing` ne compte pas comme une sous-commande.
     ctx = audit.Context.build(WS)
     assert audit.check_tool_use("Bash", {"command": RUN_BATCH}, ctx) == []
     assert audit.check_tool_use("PowerShell", {"command": RUN_BATCH}, ctx) == []
-    other = RUN_BATCH.replace(REPO_POSIX, "C:/x/slm-weight-editing")
+    other = RUN_BATCH.replace("uv run ", "uv run --project C:/x/slm-weight-editing ")
     assert ("commande-hors-liste", f"« {other[:80]} »") in audit.check_tool_use(
         "Bash", {"command": other}, ctx
     )
@@ -672,7 +693,7 @@ def test_consigne_states_protocol():
         "run-batch",
         "session-status",
         "run-script scripts/<nom>.py",
-        "uv run --project <DEPOT><EXTRA> slm-weight-editing",
+        "uv run<EXTRA> slm-weight-editing",
         "--sessions-root sessions",
         "<BUDGET>",
         "work/",
@@ -764,10 +785,10 @@ def test_batches_outside_workspace_data_are_flagged(tmp_path):
     assert [(v.line, v.rule) for v in found] == [(4, "hors-espace-seance")]
 
 
-# Poste de séance avec GPU : `--extra cuda` est la seule option uv admise en plus de --project.
+# Poste de séance avec GPU : `--extra cuda` est la seule option uv admise.
 
-UV_CUDA = f"uv run --project {REPO_POSIX} --extra cuda slm-weight-editing"
-UV_PLAIN = f"uv run --project {REPO_POSIX} slm-weight-editing"
+UV_CUDA = "uv run --extra cuda slm-weight-editing"
+UV_PLAIN = "uv run slm-weight-editing"
 CTX_CUDA = dataclasses.replace(CTX_S1, cuda=True)
 
 
@@ -804,6 +825,9 @@ def test_context_reads_cuda_from_workspace_json(tmp_path, content, expected):
         "--with numpy --extra cuda",
         "--python 3.12 --extra cuda",
         "--no-project --extra cuda",
+        f"--project {REPO_POSIX} --extra cuda",
+        f"--extra cuda --project {REPO_POSIX}",
+        "--directory C:/autre --extra cuda",
         "--extra cpu",
         "--extra cuda --extra cpu",
         "--extra=cuda",
@@ -814,15 +838,62 @@ def test_context_reads_cuda_from_workspace_json(tmp_path, content, expected):
 )
 def test_other_uv_options_are_refused(uv_options):
     cmd = (
-        f"uv run --project {REPO_POSIX} {uv_options} slm-weight-editing "
+        f"uv run {uv_options} slm-weight-editing "
         f"session-status --session s1 --sessions-root {WS.as_posix()}/sessions"
     )
     assert "commande-hors-liste" in rules_of(audit.check_shell(cmd, CTX_CUDA)), uv_options
 
 
 def test_extra_cuda_does_not_open_python():
-    cmd = f"uv run --project {REPO_POSIX} --extra cuda python x.py"
+    cmd = "uv run --extra cuda python x.py"
     assert rules_of(audit.check_shell(cmd, CTX_S1)) >= {
         "python-hors-lanceur",
         "commande-hors-liste",
     }
+
+
+# `env.UV_PROJECT` de settings.json fixe le dépôt : le contrôle « dépôt attendu » le lit.
+
+
+def _transcript(path: Path) -> Path:
+    block = {
+        "type": "tool_use",
+        "id": "t1",
+        "name": "Bash",
+        "input": {"command": f"{UV} session-status --session s1 --sessions-root sessions"},
+    }
+    entry = {"message": {"role": "assistant", "content": [block]}}
+    path.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+    return path
+
+
+def _workspace_with_settings(tmp_path: Path, settings: dict | None) -> Path:
+    ws = tmp_path / "ws"
+    (ws / ".claude").mkdir(parents=True)
+    if settings is not None:
+        (ws / ".claude" / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
+    return ws
+
+
+@pytest.mark.parametrize(
+    ("settings", "ok"),
+    [
+        ({"env": {"UV_PROJECT": REPO_POSIX}}, True),
+        ({"env": {"UV_PROJECT": "C:/autre"}}, False),
+        ({"permissions": {}}, False),
+        ({"env": {}}, False),
+        (None, False),
+    ],
+)
+def test_settings_uv_project_must_designate_expected_repo(tmp_path, settings, ok):
+    ws = _workspace_with_settings(tmp_path, settings)
+    found = audit.audit_transcript(_transcript(ws / "t.jsonl"), ws, repo=REPO, session_id="s1")
+    assert [v.rule for v in found] == ([] if ok else ["commande-hors-liste"])
+    if not ok:
+        assert "env.UV_PROJECT" in found[0].detail and "attendu" in found[0].detail
+
+
+def test_settings_uv_project_checked_against_repo_option(tmp_path):
+    ws = _workspace_with_settings(tmp_path, {"env": {"UV_PROJECT": "C:/autre"}})
+    t = _transcript(ws / "t.jsonl")
+    assert audit.audit_transcript(t, ws, repo="C:/autre", session_id="s1") == []

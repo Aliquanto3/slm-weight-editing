@@ -93,9 +93,8 @@ def test_settings_json(ws):
     assert perms["disableBypassPermissionsMode"] == "disable"
     assert perms["disableAutoMode"] == "disable"
     assert settings["enableAllProjectMcpServers"] is False
-    repo = REPO.resolve().as_posix()
     commands = [
-        f"{tool}(uv run --project {repo} slm-weight-editing {sub} *)"
+        f"{tool}(uv run slm-weight-editing {sub} *)"
         for tool in ("Bash", "PowerShell")
         for sub in ("run-batch", "session-status", "run-script")
     ]
@@ -167,13 +166,15 @@ def test_settings_json(ws):
 def test_instructions_are_rendered(ws):
     consigne = (ws / "CONSIGNE.md").read_text(encoding="utf-8")
     repo = REPO.resolve().as_posix()
-    assert f"uv run --project {repo} slm-weight-editing run-script scripts/<nom>.py" in consigne
+    assert "uv run slm-weight-editing run-script scripts/<nom>.py" in consigne
+    assert repo not in consigne and "--project" not in consigne
     assert "--session s1 --sessions-root sessions" in consigne
     assert "`10` lots" in consigne and "`data/gsm8k-train.jsonl`" in consigne
     assert "<ID_SEANCE>" not in consigne and "<DEPOT>" not in consigne
     assert "<EXTRA>" not in consigne and "--extra" not in consigne
     assert "<EXTRA>" not in (ws / "CLAUDE.md").read_text(encoding="utf-8")
-    assert "<DEPOT>" not in (ws / "CLAUDE.md").read_text(encoding="utf-8")
+    claude = (ws / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "<DEPOT>" not in claude and repo not in claude and "--project" not in claude
 
 
 @pytest.fixture
@@ -188,12 +189,11 @@ def ws_cuda(tmp_path, base, monkeypatch) -> Path:
 
 
 def test_cuda_workspace_settings_carry_extra(ws_cuda):
-    repo = REPO.resolve().as_posix()
     allow = json.loads((ws_cuda / ".claude" / "settings.json").read_text("utf-8"))["permissions"][
         "allow"
     ]
     assert allow[:6] == [
-        f"{tool}(uv run --project {repo} --extra cuda slm-weight-editing {sub} *)"
+        f"{tool}(uv run --extra cuda slm-weight-editing {sub} *)"
         for tool in ("Bash", "PowerShell")
         for sub in ("run-batch", "session-status", "run-script")
     ]
@@ -204,12 +204,13 @@ def test_cuda_workspace_settings_carry_extra(ws_cuda):
 def test_cuda_workspace_instructions_carry_extra(ws_cuda):
     repo = REPO.resolve().as_posix()
     consigne = (ws_cuda / "CONSIGNE.md").read_text(encoding="utf-8")
-    base_cmd = f"uv run --project {repo} --extra cuda slm-weight-editing"
+    base_cmd = "uv run --extra cuda slm-weight-editing"
     for sub in ("run-batch", "session-status", "run-script scripts/<nom>.py"):
         assert f"{base_cmd} {sub}" in consigne
     assert "<EXTRA>" not in consigne
     claude = (ws_cuda / "CLAUDE.md").read_text(encoding="utf-8")
-    assert f"uv run --project {repo} --extra cuda slm-weight-editing run-batch" in claude
+    assert "uv run --extra cuda slm-weight-editing run-batch" in claude
+    assert repo not in consigne and repo not in claude
     assert "<EXTRA>" not in claude
     info = json.loads((ws_cuda / "workspace.json").read_text(encoding="utf-8"))
     assert info["cuda"] is True
@@ -247,7 +248,7 @@ def test_cuda_workspace_refused_outside_windows(tmp_path, base, monkeypatch):
 def test_templates_in_repo_have_no_personal_path():
     for path in workspace.TEMPLATES.iterdir():
         text = path.read_text(encoding="utf-8")
-        assert "<DEPOT>" in text
+        assert "<DEPOT>" not in text and "--project" not in text
         assert not re.search(r"[A-Za-z]:[\\/]|/home/|/Users/", text), path.name
     assert not (REPO / "session").exists()
 
@@ -649,3 +650,20 @@ def test_sandbox_executes_the_copy_not_the_mutable_file(ws):
     assert proc.returncode == 0 and proc.stdout.strip() == "copie", proc.stderr
     proc = boot({**cfg, "sha256": "00" * 32})
     assert proc.returncode == REFUSED and "altérée" in proc.stderr
+
+
+def test_settings_pin_repo_through_uv_project_env(ws):
+    """Le dépôt n'est cité que dans `env.UV_PROJECT` (et workspace.json) : jamais dans une règle."""
+    settings = json.loads((ws / ".claude" / "settings.json").read_text("utf-8"))
+    repo = REPO.resolve().as_posix()
+    assert settings["env"] == {"UV_PROJECT": repo}
+    perms = settings["permissions"]
+    assert not any(repo in rule for rule in [*perms["allow"], *perms["deny"]])
+    assert not any("--project" in rule for rule in perms["allow"])
+
+
+@pytest.mark.parametrize("tool", ["Bash", "PowerShell"])
+def test_settings_deny_uv_redirection(ws, tool):
+    deny = json.loads((ws / ".claude" / "settings.json").read_text("utf-8"))["permissions"]["deny"]
+    for needle in ("UV_", "--project", "--directory"):
+        assert f"{tool}(*{needle}*)" in deny, needle

@@ -7,7 +7,8 @@ séance, ouverture de séance par l'agent, commandes hors liste blanche. Avec le
 compare `base_tensors_sha256` de la ligne `open` du journal à une référence fournie par Anaël.
 
 La liste blanche fait la règle : toute commande shell autre que les trois commandes de l'espace
-(`uv run --project <dépôt> slm-weight-editing run-batch|session-status|run-script`) échoue, comme
+(`uv run[ --extra cuda] slm-weight-editing run-batch|session-status|run-script`, le dépôt étant
+fixé par `env.UV_PROJECT` de `.claude/settings.json`) échoue, comme
 toute lecture hors de l'espace et toute écriture hors de `scripts/`, `notes/`, `EDITION.md` et
 des safetensors de `work/`. Les motifs (heldout, torch, obfuscation...) restent en appoint, sur le
 texte brut et sur le texte aux échappements Python décodés (hexadécimaux, unicode, nommés, octaux).
@@ -378,16 +379,15 @@ _PYTHON = re.compile(r"(?:^|\buv\s+run\s+(?:--\S+\s+(?:\S+\s+)?)*)(?:python[0-9.
 _SEPARATORS = re.compile(r"&&|\|\||;|\||\n|(?<![0-9>])&(?!&)")
 _CD = re.compile(r"^(?:cd|chdir|pushd|set-location|sl|push-location)(?:\s+(.*))?$", re.IGNORECASE)
 _WHITELISTED = re.compile(
-    # `--extra cuda` (poste de séance avec GPU) est la seule option uv admise en plus de --project.
-    r"^uv run --project (\S+)( --extra cuda)? slm-weight-editing ("
-    + "|".join(ALLOWED_SUBCOMMANDS)
-    + r")(?:\s|$)"
+    # `--extra cuda` (poste de séance avec GPU) est la seule option uv admise : le dépôt vient de
+    # `env.UV_PROJECT` des réglages, jamais de la commande (`--project`, `--directory` refusés).
+    r"^uv run( --extra cuda)? slm-weight-editing (" + "|".join(ALLOWED_SUBCOMMANDS) + r")(?:\s|$)"
 )
 
 
 @dataclass(frozen=True)
 class Context:
-    """Espace de séance (dossier courant attendu) et dépôt du harnais (forme `--project`)."""
+    """Espace de séance (dossier courant attendu) et dépôt attendu dans `env.UV_PROJECT`."""
 
     workspace: str | None
     repo: str
@@ -409,6 +409,17 @@ class Context:
         ws = None if workspace is None else _norm_path(Path(workspace).resolve().as_posix())
         cuda = None if workspace is None else _workspace_cuda(Path(workspace))
         return cls(ws, _norm_path(Path(repo).resolve().as_posix()), session_id, cuda)
+
+
+def _settings_uv_project(workspace: Path) -> str | None:
+    """`env.UV_PROJECT` de `<espace>/.claude/settings.json` (None si absent ou illisible)."""
+    try:
+        info = json.loads((workspace / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    except OSError, ValueError:
+        return None
+    env = info.get("env") if isinstance(info, dict) else None
+    value = env.get("UV_PROJECT") if isinstance(env, dict) else None
+    return _norm_path(value) if isinstance(value, str) and value else None
 
 
 def _workspace_cuda(workspace: Path) -> bool:
@@ -512,9 +523,9 @@ def check_shell(command: str, ctx: Context) -> list[tuple[str, str]]:
             if not _in_workspace(target, ctx) or _absolute(target, ctx) != ctx.workspace:
                 found.append(("hors-espace-seance", f"cd {target[:60]}"))
         m = _WHITELISTED.match(part)
-        if m is None or _norm_path(m.group(1)) != ctx.repo:
+        if m is None:
             found.append(("commande-hors-liste", f"« {part[:80]} »"))
-        elif ctx.cuda is not None and bool(m.group(2)) != ctx.cuda:
+        elif ctx.cuda is not None and bool(m.group(1)) != ctx.cuda:
             # Sans l'extra, `uv run` resynchronise et retire torch CUDA ; avec, hors poste GPU,
             # il installerait la roue CUDA.
             want = "exigé" if ctx.cuda else "interdit"
@@ -674,6 +685,19 @@ def audit_transcript(
                 tool_uses += 1
                 for rule, detail in check_tool_use(name, tool_input, ctx):
                     violations.append(Violation(source, number, rule, name, detail))
+    if workspace is not None:
+        uv_project = _settings_uv_project(Path(workspace))
+        if uv_project != ctx.repo:
+            violations.append(
+                Violation(
+                    source,
+                    0,
+                    "commande-hors-liste",
+                    "-",
+                    f"settings.json : env.UV_PROJECT {uv_project or 'absent'} "
+                    f"au lieu du dépôt attendu {ctx.repo}",
+                )
+            )
     if tool_uses == 0:
         violations.append(Violation(source, 0, "transcription-vide", "-", "aucun appel d'outil"))
     return violations
@@ -872,7 +896,10 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     )
     p.add_argument("--base-revision", help="révision attendue de la base (ligne open)")
     p.add_argument("--write-reference", help="écrit la référence calculée par --reference-from")
-    p.add_argument("--repo", help="dépôt du harnais attendu dans --project (défaut : ce dépôt)")
+    p.add_argument(
+        "--repo",
+        help="dépôt du harnais attendu dans env.UV_PROJECT des réglages (défaut : ce dépôt)",
+    )
     p.set_defaults(func=run)
 
 

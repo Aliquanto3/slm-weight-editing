@@ -1,6 +1,6 @@
 """Lanceur `run-script` : seule voie d'exécution de Python pour l'agent éditeur (story 5, CAP-6).
 
-`uv run --project <dépôt> slm-weight-editing run-script scripts/x.py --session <id>
+`uv run slm-weight-editing run-script scripts/x.py --session <id>
 --sessions-root sessions`, depuis l'espace de séance. Le script (sous `scripts/` de l'espace) tourne
 dans un sous-processus `python -I -B -X utf8`, environnement purgé, dossier courant = l'espace,
 derrière le crochet d'audit de `_sandbox.py` (voir sa docstring et la fiche de la story 5).
