@@ -49,3 +49,6 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 - 2026-11-04 08:36 · 3 · dev · lancé (dev-story Opus, worktree wt-s3, feat/harnais-budget) · —
 - 2026-11-04 08:36 · 6 · dev · lancé (dev-story Sonnet, worktree wt-s6, feat/comparaison-editions) · —
 - 2026-11-04 08:40 · 6 · dev · fini, 11 tests ajoutés, suite verte · b598c2d
+- 2026-11-04 08:43 · 6 · second-avis · 2 medium, 7 low · —
+- 2026-11-04 08:43 · 6 · review · lancée (Opus, passe 1) · —
+- 2026-11-04 08:43 · 3 · dev · fini, 21 tests (39 cas), suite verte, torch 2.15.0 +cpu sous Linux · 33b924c
