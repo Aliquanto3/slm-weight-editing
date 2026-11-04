@@ -79,3 +79,6 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 - 2026-11-04 09:07 · 1.5 · décision · lancée pendant la revue de 1.4 (fichiers disjoints, commandes du gel fixées) · —
 - 2026-11-04 09:07 · 1.5 · dev · lancé (dev-story Opus, story à risque, worktree wt-s5, feat/protocole-seance) · —
 - 2026-11-04 09:07 · 1.4 · décision · Anaël : plafond du diff gardé à 10 % par tenseur, éditions creuses imposées par la consigne de séance · —
+- 2026-11-04 09:12 · 1.4 · review · passe 1 : 2 medium et 3 low Important corrigés, 1 low corrigé · c70c58f
+- 2026-11-04 09:12 · 1.4 · PR · #8 ouverte · c70c58f
+- 2026-11-04 09:12 · 1.4 · review · passe 2 lancée · —
