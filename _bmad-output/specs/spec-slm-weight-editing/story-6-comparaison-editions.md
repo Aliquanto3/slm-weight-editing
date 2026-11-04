@@ -17,3 +17,9 @@ Base à jour (origin/main 5ec3233), aucun rebase. Branchement vérifié : `add_p
 - Nit, low, second avis n° 7 : corrigé. La docstring précise que l'IC du score vient du banc, tel quel.
 - Nit, low, second avis n° 8 : rejeté. Faux positif de Pyright : `main(argv: list[str] | None)` accepte la liste.
 - Nit, low, second avis n° 9 : corrigé. `--tag-a`/`--tag-b` sans `--summary` sont refusés ; avec un seul résumé, deux tags distincts sont exigés.
+
+### Passe 2 (2026-11-04, SHA revu d9929d9)
+
+Base à jour (origin/main 5ec3233), aucun rebase. Relecture du seul diff b598c2d..d9929d9. Vérifié à l'exécution : pour un biais 1-D et un scalaire 0-d, le cosinus aplati reste calculé (0,9129 et -1,0) et les directions sont n/a avec la note ; une piste ou catégorie absente d'un côté donne une ligne « absente de <libellé> » dans le Markdown et `missing` = "A"/"B" dans le JSON, sans autre texte que les noms de piste et de catégorie déjà affichés auparavant. Test de Newcombe : oracle indépendant (valeurs publiées), valable. ruff propre, 63 tests passent. Complexité : aucun constat.
+
+- Aucun constat nouveau : les deux Important et les nits de la passe 1 tiennent.
