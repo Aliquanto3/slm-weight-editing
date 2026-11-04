@@ -897,3 +897,34 @@ def test_settings_uv_project_checked_against_repo_option(tmp_path):
     ws = _workspace_with_settings(tmp_path, {"env": {"UV_PROJECT": "C:/autre"}})
     t = _transcript(ws / "t.jsonl")
     assert audit.audit_transcript(t, ws, repo="C:/autre", session_id="s1") == []
+
+
+@pytest.mark.parametrize("tail", ["--project C:/autre", "--directory C:/autre", "--project=C:/x"])
+def test_project_or_directory_after_subcommand_is_refused(tail):
+    cmd = f"{UV} session-status --session s1 --sessions-root sessions {tail}"
+    assert "commande-hors-liste" in rules_of(audit.check_shell(cmd, CTX_S1)), tail
+
+
+def test_settings_local_overrides_uv_project(tmp_path):
+    ws = _workspace_with_settings(tmp_path, {"env": {"UV_PROJECT": REPO_POSIX}})
+    (ws / ".claude" / "settings.local.json").write_text(
+        json.dumps({"env": {"UV_PROJECT": "C:/autre"}}), encoding="utf-8"
+    )
+    found = audit.audit_transcript(_transcript(ws / "t.jsonl"), ws, repo=REPO, session_id="s1")
+    assert [v.rule for v in found] == ["commande-hors-liste"]
+
+
+@pytest.mark.parametrize("local", [False, True])
+def test_other_uv_variable_in_settings_is_refused(tmp_path, local):
+    ws = _workspace_with_settings(tmp_path, {"env": {"UV_PROJECT": REPO_POSIX}})
+    name = "settings.local.json" if local else "settings.json"
+    env = (
+        {"UV_WORKING_DIR": "C:/autre"}
+        if local
+        else {"UV_PROJECT": REPO_POSIX, "UV_WORKING_DIR": "C:/x"}
+    )
+    (ws / ".claude" / name).write_text(json.dumps({"env": env}), encoding="utf-8")
+    found = audit.audit_transcript(_transcript(ws / "t.jsonl"), ws, repo=REPO, session_id="s1")
+    assert [(v.rule, v.detail) for v in found] == [
+        ("environnement", "réglages : env.UV_WORKING_DIR défini")
+    ]
