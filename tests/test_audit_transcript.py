@@ -671,7 +671,7 @@ def test_consigne_states_protocol():
         "run-batch",
         "session-status",
         "run-script scripts/<nom>.py",
-        "uv run --project <DEPOT> slm-weight-editing",
+        "uv run --project <DEPOT><EXTRA> slm-weight-editing",
         "--sessions-root sessions",
         "<BUDGET>",
         "work/",
@@ -761,3 +761,45 @@ def test_batches_outside_workspace_data_are_flagged(tmp_path):
             f.write(json.dumps(e) + "\n")
     found = audit.audit_batches(s, WS)
     assert [(v.line, v.rule) for v in found] == [(4, "hors-espace-seance")]
+
+
+# Poste de séance avec GPU : `--extra cuda` est la seule option uv admise en plus de --project.
+
+UV_CUDA = f"uv run --project {REPO_POSIX} --extra cuda slm-weight-editing"
+
+
+@pytest.mark.parametrize("sub", ["run-batch", "session-status", "run-script"])
+def test_extra_cuda_is_accepted(sub):
+    cmd = f"{UV_CUDA} {sub} --session s1 --sessions-root {WS.as_posix()}/sessions"
+    assert audit.check_shell(cmd, CTX_S1) == []
+
+
+@pytest.mark.parametrize(
+    "uv_options",
+    [
+        "--extra cuda --with numpy",
+        "--with numpy --extra cuda",
+        "--python 3.12 --extra cuda",
+        "--no-project --extra cuda",
+        "--extra cpu",
+        "--extra cuda --extra cpu",
+        "--extra=cuda",
+        "--all-extras",
+        "--extra cuda2",
+        "--extra cuda --no-sync",
+    ],
+)
+def test_other_uv_options_are_refused(uv_options):
+    cmd = (
+        f"uv run --project {REPO_POSIX} {uv_options} slm-weight-editing "
+        f"session-status --session s1 --sessions-root {WS.as_posix()}/sessions"
+    )
+    assert "commande-hors-liste" in rules_of(audit.check_shell(cmd, CTX_S1)), uv_options
+
+
+def test_extra_cuda_does_not_open_python():
+    cmd = f"uv run --project {REPO_POSIX} --extra cuda python x.py"
+    assert rules_of(audit.check_shell(cmd, CTX_S1)) >= {
+        "python-hors-lanceur",
+        "commande-hors-liste",
+    }

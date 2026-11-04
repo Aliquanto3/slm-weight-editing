@@ -18,6 +18,12 @@ dependencies = [
     "transformers>=5.22.1",
 ]
 
+[project.optional-dependencies]
+# `cuda` : poste de séance avec GPU (torch CUDA 13.2, Windows) ; `cpu` n'existe que pour déclarer le
+# conflit exigé par uv (le défaut, sans extra, reste PyPI sous Windows/macOS et CPU sous Linux).
+cpu = ["torch>=2.15.0"]
+cuda = ["torch>=2.15.0"]
+
 [project.urls]
 Homepage = "https://github.com/Aliquanto3/slm-weight-editing"
 "Banc de mesure" = "https://github.com/Aliquanto3/slm-quality-bench"
@@ -55,5 +61,17 @@ name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
+# Extra `cuda` (poste de séance, Windows) : roue CUDA 13.2. La CI n'installe jamais l'extra.
+[[tool.uv.index]]
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
+explicit = true
+
+[tool.uv]
+conflicts = [[{ extra = "cpu" }, { extra = "cuda" }]]
+
 [tool.uv.sources]
-torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torch = [
+    { index = "pytorch-cpu", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu132", extra = "cuda", marker = "sys_platform == 'win32'" },
+]

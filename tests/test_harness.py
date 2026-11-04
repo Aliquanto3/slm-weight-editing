@@ -518,7 +518,7 @@ def test_crash_during_generation_consumes_batch(root, stop_ckpt, train_file, mon
     d = root / "s1"
     real = harness._generate
 
-    def crash(work, problems):
+    def crash(work, problems, device):
         raise RuntimeError("plantage simulé")
 
     monkeypatch.setattr(harness, "_generate", crash)
@@ -576,11 +576,11 @@ def test_freeze_during_batch_refused_never_undone(root, stop_ckpt, train_file, m
     real = harness._generate
     seen = []
 
-    def freeze_then_generate(work, problems):
+    def freeze_then_generate(work, problems, device):
         with pytest.raises(HarnessError, match="un lot tourne déjà") as exc:
             harness.update_state(d, frozen=True)
         seen.append(exc.value)
-        return real(work, problems)
+        return real(work, problems, device)
 
     monkeypatch.setattr(harness, "_generate", freeze_then_generate)
     harness.run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
@@ -613,3 +613,123 @@ def test_checkpoint_generation_config_cannot_change_decoding(tmp_path, train_fil
     assert files["generation_config.json"] == gen_sha
     assert files["generation_config.json"] != before.get("generation_config.json")
     assert files["config.json"] == before["config.json"]
+
+
+def fake_cuda(monkeypatch, seen=None):
+    """CUDA simulé : pilote, nom de GPU et génération remplacés ; aucun GPU réel."""
+    monkeypatch.setattr(harness, "_cuda_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "get_device_name", lambda index: "NVIDIA GeForce RTX 3050")
+    monkeypatch.setattr(torch.version, "cuda", "13.2")
+
+    def fake_generate(work, problems, device):
+        if seen is not None:
+            seen.append(device)
+        settings = harness._generation_settings("raw", "torch.bfloat16")
+        outputs = [
+            {"id": p["id"], "text": "", "new_tokens": 0, "done_reason": "stop"} for p in problems
+        ]
+        return settings, outputs
+
+    monkeypatch.setattr(harness, "_generate", fake_generate)
+
+
+def test_cuda_batch_journals_device_gpu_and_versions(root, stop_ckpt, train_file, monkeypatch):
+    seen = []
+    fake_cuda(monkeypatch, seen)
+    open_s(root, stop_ckpt, 10)
+    entry = harness.run_batch(
+        "s1", "gsm8k", "train", train_file, count=1, sessions_root=root, device="auto"
+    )
+    assert seen == ["cuda"]
+    assert entry["device"] == {
+        "device": "cuda",
+        "gpu_name": "NVIDIA GeForce RTX 3050",
+        "torch_version": torch.__version__,
+        "cuda_version": "13.2",
+    }
+    journal = harness.read_journal(root / "s1")
+    assert [(e["event"], e.get("device")) for e in journal[1:]] == [
+        ("reserve", "cuda"),
+        ("batch", entry["device"]),
+    ]
+    assert harness.read_journal(root / "s1")[-1]["settings"]["max_new_tokens"] == 4096
+
+
+def test_cpu_batch_journals_no_gpu(root, stop_ckpt, train_file):
+    open_s(root, stop_ckpt, 10)
+    entry = harness.run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
+    assert entry["device"]["device"] == "cpu"
+    assert entry["device"]["gpu_name"] is None
+    assert entry["device"]["torch_version"] == torch.__version__
+
+
+def test_auto_falls_back_to_cpu_without_cuda():
+    assert harness.resolve_device("auto") == "cpu"
+    assert harness.resolve_device("cpu") == "cpu"
+
+
+def test_cuda_requested_without_gpu_refused_without_consuming_batch(root, stop_ckpt, train_file):
+    open_s(root, stop_ckpt, 10)
+    with pytest.raises(HarnessError, match="--device cuda refusé : aucun GPU CUDA disponible"):
+        harness.run_batch(
+            "s1", "gsm8k", "train", train_file, count=1, sessions_root=root, device="cuda"
+        )
+    assert harness.read_state(root / "s1").used == 0
+    assert [e["event"] for e in harness.read_journal(root / "s1")] == ["open"]
+
+
+def test_unknown_device_refused():
+    with pytest.raises(HarnessError, match="appareil 'tpu' refusé"):
+        harness.resolve_device("tpu")
+
+
+def test_device_change_mid_session_refused_before_reservation(
+    root, stop_ckpt, train_file, monkeypatch
+):
+    open_s(root, stop_ckpt, 10)
+    harness.run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
+    fake_cuda(monkeypatch)
+    with pytest.raises(
+        HarnessError, match="changement d'appareil refusé : la séance tourne sur cpu, pas sur cuda"
+    ):
+        harness.run_batch(
+            "s1", "gsm8k", "train", train_file, count=1, sessions_root=root, device="auto"
+        )
+    assert harness.read_state(root / "s1").used == 1
+    harness.run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root, device="cpu")
+    assert harness.read_state(root / "s1").used == 2
+
+
+def test_crashed_first_batch_still_fixes_device(root, stop_ckpt, train_file, monkeypatch):
+    fake_cuda(monkeypatch)
+    monkeypatch.setattr(harness, "_generate", lambda *a: (_ for _ in ()).throw(RuntimeError("x")))
+    open_s(root, stop_ckpt, 10)
+    with pytest.raises(RuntimeError):
+        harness.run_batch(
+            "s1", "gsm8k", "train", train_file, count=1, sessions_root=root, device="auto"
+        )
+    with pytest.raises(HarnessError, match="changement d'appareil refusé"):
+        harness.run_batch(
+            "s1", "gsm8k", "train", train_file, count=1, sessions_root=root, device="cpu"
+        )
+
+
+def test_cli_device_option_default_auto_and_choices(root, stop_ckpt, train_file, capsys):
+    open_s(root, stop_ckpt, 10)
+    args = ["run-batch", "--session", "s1", "--sessions-root", str(root), "--dataset", "gsm8k"]
+    args += ["--split", "train", "--data", str(train_file), "--count", "1"]
+    assert main(args) == 0
+    assert "(appareil cpu)" in capsys.readouterr().out
+    assert main([*args, "--device", "cuda"]) == 2
+    assert "--device cuda refusé" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        main([*args, "--device", "tpu"])
+
+
+def test_generate_releases_gpu_memory(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(harness, "_generate_on", lambda w, p, d: ({}, []))
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: calls.append("empty"))
+    harness._generate(tmp_path, [], "cuda")
+    harness._generate(tmp_path, [], "cpu")
+    assert calls == ["empty"]

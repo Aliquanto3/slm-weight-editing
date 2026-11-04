@@ -81,9 +81,19 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def allowed_commands(repo: Path) -> list[str]:
-    """Préfixes exacts des trois commandes de l'éditeur (forme vérifiée par l'audit)."""
-    return [f"uv run --project {posix(repo)} slm-weight-editing {s}" for s in ALLOWED_SUBCOMMANDS]
+CUDA_EXTRA = " --extra cuda"
+
+
+def allowed_commands(repo: Path, cuda: bool = False) -> list[str]:
+    """Préfixes exacts des trois commandes de l'éditeur (forme vérifiée par l'audit).
+
+    Avec `cuda`, `--extra cuda` suit `--project` : `uv run` resynchroniserait sinon
+    l'environnement sans l'extra et retirerait torch CUDA.
+    """
+    extra = CUDA_EXTRA if cuda else ""
+    return [
+        f"uv run --project {posix(repo)}{extra} slm-weight-editing {s}" for s in ALLOWED_SUBCOMMANDS
+    ]
 
 
 def memory_excludes(workspace: Path, repo: Path) -> list[str]:
@@ -99,9 +109,11 @@ def memory_excludes(workspace: Path, repo: Path) -> list[str]:
     return out
 
 
-def build_settings(workspace: Path, repo: Path, session_id: str) -> dict:
+def build_settings(workspace: Path, repo: Path, session_id: str, cuda: bool = False) -> dict:
     allow = [
-        f"{tool}({cmd} *)" for tool in ("Bash", "PowerShell") for cmd in allowed_commands(repo)
+        f"{tool}({cmd} *)"
+        for tool in ("Bash", "PowerShell")
+        for cmd in allowed_commands(repo, cuda)
     ]
     allow += [
         "Read(./**)",
@@ -156,13 +168,16 @@ def build_settings(workspace: Path, repo: Path, session_id: str) -> dict:
     }
 
 
-def render(name: str, *, session_id: str, budget: int, repo: Path, data: list[str]) -> str:
+def render(
+    name: str, *, session_id: str, budget: int, repo: Path, data: list[str], cuda: bool = False
+) -> str:
     text = (TEMPLATES / name).read_text(encoding="utf-8")
     listing = ", ".join(f"`{DATA_DIR}/{n}`" for n in data)
     for key, value in (
         ("<ID_SEANCE>", session_id),
         ("<BUDGET>", str(budget)),
         ("<DEPOT>", posix(repo)),
+        ("<EXTRA>", CUDA_EXTRA if cuda else ""),
         ("<DONNEES>", listing),
     ):
         text = text.replace(key, value)
@@ -192,6 +207,7 @@ def create_workspace(
     *,
     base_revision: str | None = None,
     repo: str | Path | None = None,
+    cuda: bool = False,
 ) -> Path:
     """Ouvre la séance dans `<out>/sessions` et écrit l'espace de l'éditeur ; renvoie `<out>`."""
     out = Path(out).resolve()
@@ -219,6 +235,7 @@ def create_workspace(
         "sessions_root": str((out / SESSIONS_DIR).resolve()),
         "data_dir": str((out / DATA_DIR).resolve()),
         "repo": str(repo),
+        "cuda": cuda,
     }
     (out / harness.WORKSPACE_FILE).write_text(
         json.dumps(info, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
@@ -227,13 +244,13 @@ def create_workspace(
         (out / d).mkdir(exist_ok=True)
     for f in files:
         shutil.copy2(f, out / DATA_DIR / f.name)
-    settings = build_settings(out, repo, session_id)
+    settings = build_settings(out, repo, session_id, cuda)
     (out / ".claude" / "settings.json").write_text(
         json.dumps(settings, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
     names = [f.name for f in files]
     for name in ("CLAUDE.md", "CONSIGNE.md"):
-        text = render(name, session_id=session_id, budget=budget, repo=repo, data=names)
+        text = render(name, session_id=session_id, budget=budget, repo=repo, data=names, cuda=cuda)
         (out / name).write_text(text, encoding="utf-8", newline="\n")
     return out
 
@@ -253,6 +270,11 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument("--base-checkpoint", required=True, help="dossier safetensors HF de base")
     p.add_argument("--base-revision", help="révision HF du checkpoint de base")
     p.add_argument("--data", required=True, action="append", help="fichier JSONL train (répétable)")
+    p.add_argument(
+        "--cuda",
+        action="store_true",
+        help="poste avec GPU : les commandes de l'éditeur portent --extra cuda",
+    )
     p.set_defaults(func=run)
 
 
@@ -265,6 +287,7 @@ def run(args: argparse.Namespace) -> int:
             args.base_checkpoint,
             args.data,
             base_revision=args.base_revision,
+            cuda=args.cuda,
         )
     except harness.HarnessError as exc:
         print(f"Erreur : {exc}", file=sys.stderr)

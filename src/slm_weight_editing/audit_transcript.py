@@ -378,7 +378,10 @@ _PYTHON = re.compile(r"(?:^|\buv\s+run\s+(?:--\S+\s+(?:\S+\s+)?)*)(?:python[0-9.
 _SEPARATORS = re.compile(r"&&|\|\||;|\||\n|(?<![0-9>])&(?!&)")
 _CD = re.compile(r"^(?:cd|chdir|pushd|set-location|sl|push-location)(?:\s+(.*))?$", re.IGNORECASE)
 _WHITELISTED = re.compile(
-    r"^uv run --project (\S+) slm-weight-editing (" + "|".join(ALLOWED_SUBCOMMANDS) + r")(?:\s|$)"
+    # `--extra cuda` (poste de séance avec GPU) est la seule option uv admise en plus de --project.
+    r"^uv run --project (\S+)(?: --extra cuda)? slm-weight-editing ("
+    + "|".join(ALLOWED_SUBCOMMANDS)
+    + r")(?:\s|$)"
 )
 
 

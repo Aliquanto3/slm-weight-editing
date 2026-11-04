@@ -171,7 +171,66 @@ def test_instructions_are_rendered(ws):
     assert "--session s1 --sessions-root sessions" in consigne
     assert "`10` lots" in consigne and "`data/gsm8k-train.jsonl`" in consigne
     assert "<ID_SEANCE>" not in consigne and "<DEPOT>" not in consigne
+    assert "<EXTRA>" not in consigne and "--extra" not in consigne
+    assert "<EXTRA>" not in (ws / "CLAUDE.md").read_text(encoding="utf-8")
     assert "<DEPOT>" not in (ws / "CLAUDE.md").read_text(encoding="utf-8")
+
+
+@pytest.fixture
+def ws_cuda(tmp_path, base) -> Path:
+    data = tmp_path / "src-data" / "gsm8k-train.jsonl"
+    data.parent.mkdir()
+    data.write_text('{"split": "train", "question": "1+1"}\n', encoding="utf-8")
+    return workspace.create_workspace(
+        tmp_path / "ws", "s1", 10, base, [data], base_revision="r0", cuda=True
+    )
+
+
+def test_cuda_workspace_settings_carry_extra(ws_cuda):
+    repo = REPO.resolve().as_posix()
+    allow = json.loads((ws_cuda / ".claude" / "settings.json").read_text("utf-8"))["permissions"][
+        "allow"
+    ]
+    assert allow[:6] == [
+        f"{tool}(uv run --project {repo} --extra cuda slm-weight-editing {sub} *)"
+        for tool in ("Bash", "PowerShell")
+        for sub in ("run-batch", "session-status", "run-script")
+    ]
+    assert allow[6] == "Read(./**)"
+    assert not any("--extra" in rule for rule in allow[6:])
+
+
+def test_cuda_workspace_instructions_carry_extra(ws_cuda):
+    repo = REPO.resolve().as_posix()
+    consigne = (ws_cuda / "CONSIGNE.md").read_text(encoding="utf-8")
+    base_cmd = f"uv run --project {repo} --extra cuda slm-weight-editing"
+    for sub in ("run-batch", "session-status", "run-script scripts/<nom>.py"):
+        assert f"{base_cmd} {sub}" in consigne
+    assert "<EXTRA>" not in consigne
+    claude = (ws_cuda / "CLAUDE.md").read_text(encoding="utf-8")
+    assert f"uv run --project {repo} --extra cuda slm-weight-editing run-batch" in claude
+    assert "<EXTRA>" not in claude
+    info = json.loads((ws_cuda / "workspace.json").read_text(encoding="utf-8"))
+    assert info["cuda"] is True
+
+
+def test_cuda_allow_rules_match_audit_whitelist(ws_cuda):
+    from slm_weight_editing import audit_transcript as audit
+
+    ctx = audit.Context.build(ws_cuda, REPO, "s1")
+    for cmd in workspace.allowed_commands(REPO, cuda=True):
+        full = f"{cmd} --session s1 --sessions-root {ws_cuda.as_posix()}/sessions"
+        assert audit.check_shell(full, ctx) == [], full
+
+
+def test_cli_cuda_flag(tmp_path, base, capsys):
+    data = tmp_path / "gsm8k-train.jsonl"
+    data.write_text('{"split": "train", "question": "1+1"}\n', encoding="utf-8")
+    out = tmp_path / "ws"
+    args = ["session-workspace", "--out", str(out), "--session", "s1", "--budget", "10"]
+    args += ["--base-checkpoint", str(base), "--data", str(data), "--cuda"]
+    assert main(args) == 0
+    assert "--extra cuda" in (out / "CONSIGNE.md").read_text(encoding="utf-8")
 
 
 def test_templates_in_repo_have_no_personal_path():
@@ -469,7 +528,7 @@ def fake_generate(monkeypatch):
     """Génération remplacée (frontière : le modèle réel n'est jamais chargé par les tests)."""
     calls = []
 
-    def generate(work, problems):
+    def generate(work, problems, device):
         calls.append(work)
         return {"model": "test"}, [{"text": "2"} for _ in problems]
 

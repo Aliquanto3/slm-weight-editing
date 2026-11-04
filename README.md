@@ -142,3 +142,20 @@ La séance se déroule dans un espace hors du dépôt, protégé par trois couch
    ```
 
    `--workspace`, `--session-dir` et la référence (`--reference` ou `--reference-from`) sont obligatoires ; la base de la ligne `open` est comparée à la révision publiée (tenseurs et autres fichiers). Code 0 : aucune violation ; code 1 : violations, une par ligne (`fichier:ligne · règle · outil · détail`) ; code 2 : entrée illisible. Toute commande hors liste blanche, toute lecture hors de l'espace, toute transcription vide et tout script refusé par `run-script` font échouer l'audit ; les copies des scripts lancés sont auditées comme le reste.
+
+## Poste de séance avec GPU
+
+Par défaut (CI, autres postes), torch vient de PyPI (Windows, macOS) ou de l'index CPU (Linux) : aucune roue CUDA. Sur le poste de séance, l'extra optionnel `cuda` installe torch CUDA 13.2 (roue Windows d'environ 2 Go, index `pytorch-cu132`) :
+
+```
+uv sync --extra cuda
+uv run --extra cuda python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+```
+
+Toute commande `uv run` du poste porte `--extra cuda` : sans lui, `uv run` resynchronise l'environnement et retire la roue CUDA. L'espace de séance se crée avec `--cuda` : les règles `allow`, la consigne et le `CLAUDE.md` de séance écrivent alors `uv run --project <dépôt> --extra cuda slm-weight-editing ...`, et l'audit accepte cette forme (et aucune autre option d'`uv`).
+
+```
+uv run --extra cuda slm-weight-editing session-workspace --cuda --out %USERPROFILE%\seances\s1 --session s1 ...
+```
+
+`run-batch --device auto|cpu|cuda` (défaut `auto` : CUDA si disponible, sinon CPU ; `cuda` sans GPU est refusé). L'appareil est fixé par le premier lot de la séance (même un lot qui plante) : un lot sur un autre appareil est refusé sans consommer de budget, car le décodage glouton peut différer entre CPU et GPU. Chaque lot journalise l'appareil, le nom du GPU et les versions de torch et de CUDA ; le dtype est celui du checkpoint (bf16 si le modèle l'est), la mémoire GPU est libérée après chaque lot.
