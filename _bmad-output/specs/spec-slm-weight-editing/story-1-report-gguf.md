@@ -56,3 +56,12 @@ Base à jour (origin/main b718329), aucun rebase. Relu 3acf3ae..48264ad et la no
 - Nit, low, second avis n° 4 : rejeté, déjà traité en passe 1 (Modelfile local sous `models/`, ignoré par git, jamais publié ; le diff publié masque le dossier personnel).
 - Complexité : 0 constat.
 - Report (inchangé) : contrôle de fidélité sur le vrai GGUF et le vrai checkpoint, puis `ollama create` et `ollama show`, à lancer par Anaël.
+
+### Passe 3 (2026-11-04, SHA revu 1276a9e)
+
+Base à jour (origin/main b718329), aucun rebase. Relu 48264ad..1276a9e seulement. Le correctif de passe 2 tient : la CLI refuse l'appel sans `--base-checkpoint` (code 2 d'argparse, vérifié), `main` est le seul point d'entrée CLI qui écrit un GGUF, le README et la spec décrivent la base comme obligatoire, la couche texte non UTF-8 et `OSError` donnent le code 1.
+
+- Nit, low, revue : non corrigé. `--base-checkpoint ""` passe argparse et `report_gguf` traite la chaîne vide comme une base absente (`if base_checkpoint`) ; usage délibéré, tracé par `fidelity.target_originals_checked: false` dans `diff.json`.
+- Nit, low, revue : non corrigé. Aucun test n'affirme `target_originals_checked: true` quand la base est fournie (`test_base_checkpoint_adds_controls_and_before_sha` contrôle les originaux, pas ce drapeau).
+- Complexité : 0 constat.
+- Fin des passes (3 sur 3). Report (inchangé) : contrôle de fidélité sur le vrai GGUF et le vrai checkpoint, puis `ollama create` et `ollama show`, à lancer par Anaël.
