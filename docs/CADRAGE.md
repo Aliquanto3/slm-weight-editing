@@ -1,6 +1,6 @@
 # Cadrage
 
-Version du 2026-11-04. Document de départ, à transformer en spec (`bmad-spec`) avant le premier développement.
+Version du 2026-11-04, mise à jour le soir même après la mesure du lot 0 (critère de succès, lot 2, matériel). Document de départ, transformé en spec dans `_bmad-output/specs/spec-slm-weight-editing/`.
 
 ## Objectif
 
@@ -10,7 +10,10 @@ Critères de succès d'une édition :
 
 - le défaut visé recule nettement sur le banc (par exemple le taux de réponses au plafond de tokens) ;
 - aucune catégorie du banc ne régresse au-delà de son intervalle de confiance ;
-- l'édition est reproductible depuis le diff publié, vérifié par sha256.
+- l'édition est reproductible depuis le diff publié, vérifié par sha256 ;
+- pour une édition des boucles de raisonnement, le modèle édité **avec** raisonnement dépasse le score global de l'original **sans** raisonnement, et la piste sans raisonnement ne régresse pas. Sinon, le meilleur réglage du modèle reste l'original sans raisonnement, et l'édition n'a pas d'usage pratique.
+
+Lot 0 (`wsp-20261104`, 2026-11-04) contre ce dernier critère. L'édition du MIT fait passer Qwen3.5-0.8B de 16,6 à 32,0 % avec raisonnement (+15,4 pts, p < 0,001 ; réponses tronquées de 72,9 à 43,2 %). Elle reste sous les 37,2 % de l'original sans raisonnement, et elle coûte 3,1 pts sans raisonnement (p = 0,011, dont −10 pts en abstention). C'est la barre à franchir pour la séance de Claude.
 
 ## Référence : « Sparks of Weight-Space Programming »
 
@@ -43,7 +46,14 @@ Takehi, Teoh, Zhang et Khattab, MIT CSAIL, 2026-11-02 ([billet](https://rikiyat.
 
 - **Lot 0, étalon** : reporter l'édition publiée du MIT dans le GGUF Ollama de `qwen3.5:0.8b` (étape 4), puis la mesurer contre l'original dans le banc. Ce lot valide la chaîne sans séance d'édition. La campagne est préparée dans `slm-quality-bench`.
 - **Lot 1, réplication** : séance Claude sur Qwen3.5-0.8B depuis l'original, sans voir l'édition du MIT. On compare ensuite les deux éditions (tenseurs touchés, cosinus des directions) et leurs scores sur le banc.
-- **Lot 2, autres cibles** : modèles et défauts relevés par le banc (section suivante).
+- **Lot 2, autres cibles** (décision d'Anaël, 2026-11-04) : `qwen3.5:2b` puis `minicpm5:2b`, après la mesure du lot 1. Les deux tiennent sur la RTX 3050 en bf16. Pour MiniCPM5 2B, c'est juste : environ 6,5 Gio demandés par le harnais (poids, plus 10 %, plus 1 Gio) pour environ 7 Gio libres, donc la carte doit être libre de tout autre usage.
+  - `qwen3.5:2b` : même famille et même défaut que le 0.8B (53 % de réponses tronquées avec raisonnement, 15 pts perdus en activant le raisonnement). C'est le test du passage à l'échelle.
+  - `minicpm5:2b` : autre famille, déjà sur la frontière de Pareto du banc sans raisonnement (61 % en 2,7 s par réponse). Avec raisonnement, 23 % de réponses tronquées et 27,6 % en raisonnement. C'est le test du transfert de la méthode.
+  - Pour l'un comme l'autre, la piste sans raisonnement est à protéger : c'est elle qui les place sur la frontière ou près d'elle.
+- **Lot 2 bis, `qwen3.5:4b`, reporté** : c'est le gain potentiel le plus grand (41 % de réponses tronquées, 19 pts perdus en activant le raisonnement, de 69,6 à 50,6 %). Une édition réussie pourrait le faire entrer sur la frontière avec raisonnement. Mais ses poids bf16 (environ 9 Go) ne tiennent pas dans les 8 Go de la RTX 3050, et des lots sur CPU seraient trop lents. Ce lot est à décider après la mesure des lots 1 et 2, sur un GPU loué d'au moins 24 Go (sous Linux, avec le bac à sable de Claude Code ; l'extra `cuda` est à étendre à Linux). La mesure au banc reste sur la tour, en GGUF quantisé. Écartés :
+  - **l'inférence quantisée sur la tour** : le décodage glouton change et le harnais refuse toute conversion implicite ; le lot ne serait plus comparable au lot 1 ni au MIT ;
+  - **l'édition directe d'un GGUF quantisé** : une édition fine (0,016 % des poids) s'écrit mal dans des blocs de 4 bits et risque de disparaître à la requantification. La chaîne reste : édition en bf16, puis requantification des seuls tenseurs touchés, validée par le lot 0.
+- **Écartés du front de Pareto** : Granite 4.0 350M et LFM3 Omni 2B, qui n'ont pas de piste avec raisonnement et bouclent peu (cas de l'échec du MIT sur Gemma 3 270M) ; Gemma 4 E4B et Nemotron 3.5 Bolt E4B, qui bouclent peu (moins de 6 % de réponses tronquées) ; Qwen 3.6 35B-A3B, trop gros.
 
 ## Cibles relevées par le banc
 
@@ -61,7 +71,7 @@ Au-delà de 2,5 Md, `qwen3.5:4b` (40,4 % en think_on) et `granite4.2:3b` (36,0 %
 
 ## Questions ouvertes
 
-- **Matériel** : la tour RTX 3050 pour les séances, ou le portable CPU 16 Go ? Un lot de 512 problèmes à 4 096 tokens est lourd sur CPU. vLLM ne tourne pas nativement sous Windows : passer par transformers, llama.cpp ou WSL.
+- **Matériel** : tranché le 2026-11-04 : la tour RTX 3050 pour les séances, avec torch CUDA (extra `cuda`) et le harnais transformers. Un GPU loué seulement pour le lot 2 bis.
 - **Coût** : une séance Opus 5.5 en effort high se mesure en dizaines de tours ; à mesurer sur le lot 1 avant d'élargir. Fable 5.1 seulement après deux échecs.
 - **Défauts autres que les boucles** : retenir ceux qui ont une signature mesurable sur des données d'entraînement (langue, format, fuite du raisonnement), pas les manques de connaissance, que l'édition ne corrige pas.
 - **Lien avec le fine-tuning Service Public** : appliquer l'édition après la fusion du LoRA, puis réévaluer ; l'ordre inverse risque de réintroduire le défaut.
