@@ -41,6 +41,11 @@ JOURNAL_FILE = "journal.jsonl"
 WORK_DIR = "work"
 LOCK_FILE = "session.lock"
 REGISTRY_FILE = "registry.jsonl"
+# Espace de séance (story 5) : écrit par `session-workspace`, il fixe séance, racine et données
+# des commandes lancées depuis l'espace (l'éditeur ne choisit ni une autre séance ni d'autres
+# données).
+WORKSPACE_FILE = "workspace.json"
+WORKSPACE_SESSIONS_DIR = "sessions"
 # Plafond du gel (story 4) : part maximale d'éléments changés par tenseur. Décision du
 # 2026-11-04 : éditions creuses imposées par la consigne de séance.
 MAX_CHANGED_SHARE = 0.10
@@ -266,6 +271,61 @@ def open_session(
     return state
 
 
+def find_workspace(cwd: str | Path | None = None) -> tuple[Path, dict] | None:
+    """Espace de séance contenant `cwd` (plus proche `workspace.json`), None hors espace."""
+    start = (Path.cwd() if cwd is None else Path(cwd)).resolve()
+    for d in (start, *start.parents):
+        path = d / WORKSPACE_FILE
+        if not path.exists():
+            continue
+        try:
+            info = json.loads(path.read_text("utf-8"))
+        except (OSError, ValueError) as exc:
+            raise HarnessError(f"espace de séance illisible : {path} ({exc})") from exc
+        keys = ("workspace", "session_id", "sessions_root", "data_dir")
+        if not isinstance(info, dict) or not all(isinstance(info.get(k), str) for k in keys):
+            raise HarnessError(f"espace de séance illisible : {path}")
+        if Path(info["workspace"]).resolve() != d:
+            raise HarnessError(f"espace de séance refusé : {path} ne désigne pas {d}")
+        return d, info
+    return None
+
+
+def bind_workspace(
+    session_id: str,
+    sessions_root: str | Path | None,
+    data_path: str | Path | None = None,
+    *,
+    cwd: str | Path | None = None,
+    default_root: str | Path = DEFAULT_SESSIONS_ROOT,
+) -> Path:
+    """Racine des séances à utiliser ; depuis un espace, celle de `workspace.json` seulement.
+
+    Depuis un espace de séance, une autre séance, une autre racine ou des données hors de
+    `<espace>/data/` sont refusées (budget et données ne se contournent pas par les options).
+    """
+    base = (Path.cwd() if cwd is None else Path(cwd)).resolve()
+    found = find_workspace(base)
+    if found is None:
+        root = Path(default_root if sessions_root is None else sessions_root)
+        return root if root.is_absolute() else base / root
+    ws, info = found
+    if session_id != info["session_id"]:
+        raise HarnessError(f"séance refusée : l'espace {ws} est celui de {info['session_id']}")
+    root = Path(info["sessions_root"]).resolve()
+    if sessions_root is not None:
+        given = Path(sessions_root)
+        if (given if given.is_absolute() else base / given).resolve() != root:
+            raise HarnessError(f"--sessions-root refusé : l'espace impose {root}")
+    if data_path is not None:
+        data_dir = Path(info["data_dir"]).resolve()
+        given = Path(data_path)
+        resolved = (given if given.is_absolute() else base / given).resolve()
+        if data_dir not in resolved.parents:
+            raise HarnessError(f"--data refusé : fichier hors de {data_dir}")
+    return root
+
+
 def check_data_request(dataset: str, split: str, data_path: str | Path) -> Path:
     """Contrôles faits avant toute lecture du fichier de données."""
     if dataset not in DATASETS:
@@ -489,10 +549,11 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     rb.add_argument("--data", required=True, help="fichier JSONL local du split train")
     rb.add_argument("--start", type=int, default=0, help="premier problème (défaut 0)")
     rb.add_argument("--count", type=int, help="nombre de problèmes (défaut : jusqu'à la fin)")
-    rb.add_argument("--sessions-root", default=DEFAULT_SESSIONS_ROOT, help=root_help)
+    root_help += " ; depuis un espace de séance, celui de workspace.json seulement"
+    rb.add_argument("--sessions-root", help=root_help)
     st = sub.add_parser("session-status", help="budget, lots consommés et gel d'une séance")
     st.add_argument("--session", required=True)
-    st.add_argument("--sessions-root", default=DEFAULT_SESSIONS_ROOT, help=root_help)
+    st.add_argument("--sessions-root", help=root_help)
     for p in (op, rb, st):
         p.set_defaults(func=run)
 
@@ -510,6 +571,7 @@ def run(args: argparse.Namespace) -> int:
             print(f"Séance {state.session_id} ouverte : budget {state.budget} lots")
             print(CEILING_NOTE)
         elif args.command == "run-batch":
+            root = bind_workspace(args.session, args.sessions_root, args.data)
             entry = run_batch(
                 args.session,
                 args.dataset,
@@ -517,14 +579,15 @@ def run(args: argparse.Namespace) -> int:
                 args.data,
                 start=args.start,
                 count=args.count,
-                sessions_root=args.sessions_root,
+                sessions_root=root,
             )
             print(
                 f"Lot {entry['batch']}/{entry['budget']} : {len(entry['problems'])} problèmes, "
                 f"reste {entry['remaining']} lots"
             )
         else:
-            directory = session_dir(args.session, args.sessions_root)
+            root = bind_workspace(args.session, args.sessions_root)
+            directory = session_dir(args.session, root)
             state = read_state(directory)
             used = used_batches(directory, state)
             print(
