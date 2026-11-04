@@ -55,9 +55,11 @@ def _parser() -> argparse.ArgumentParser:
     compare_edits.add_parser(sub)
     freeze.add_parser(sub)
     harness.add_parser(sub)
-    from slm_weight_editing import audit_transcript
+    from slm_weight_editing import audit_transcript, script_runner, workspace
 
     audit_transcript.add_parser(sub)
+    script_runner.add_parser(sub)
+    workspace.add_parser(sub)
     return parser
 
 

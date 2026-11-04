@@ -123,12 +123,21 @@ Le harnais est la seule voie d'exécution du modèle pour l'agent éditeur (prot
 
 ## Préparer et auditer une séance
 
-1. Anaël ouvre la séance (`session-open`), copie `session/` tel quel et remplace `<ID_SEANCE>` et `<BUDGET>` dans `session/CONSIGNE.md` et `session/CLAUDE.md` (copie locale, non commitée).
-2. Lancement depuis `session/`, sans serveur MCP : `claude --strict-mcp-config`. Avant le premier message, vérifier `/permissions` (règles `deny` de `session/.claude/settings.json`) et `/memory` (seul `session/CLAUDE.md` chargé). Premier message : « Lis CONSIGNE.md et suis-la. »
-3. Après le gel par Anaël, audit de la transcription (`~/.claude/projects/<projet de session/>/<id>.jsonl`, sous-agents compris) :
+La séance se déroule dans un espace hors du dépôt, protégé par trois couches : réglages Claude Code (l'agent ne voit que l'espace et n'a que trois commandes), lanceur `run-script` (seule voie pour exécuter du Python, sous crochet d'audit), audit de la transcription après la séance. Conception, contournements couverts et limites : `_bmad-output/specs/spec-slm-weight-editing/story-5-protocole-seance.md`.
+
+1. Anaël crée l'espace et ouvre la séance, depuis le dépôt (dossier neuf, hors du dépôt et de son dossier parent) :
 
    ```
-   uv run slm-weight-editing audit-session <transcription>.jsonl --workspace session --session-dir models/sessions/s1 --reference-from <checkpoint de la révision publiée> --base-revision <révision> --write-reference models/sessions/s1-reference.json
+   uv run slm-weight-editing session-workspace --out %USERPROFILE%\seances\s1 --session s1 --budget 25 --base-checkpoint <checkpoint> --base-revision <révision> --data <gsm8k-train.jsonl> [--data <math-train.jsonl>]
    ```
 
-   Code 0 : aucune violation ; code 1 : violations, une par ligne (`fichier:ligne · règle · outil · détail`) ; code 2 : entrée illisible. L'audit est textuel et large (faux positifs à relire à la main) ; règles et limites : `_bmad-output/specs/spec-slm-weight-editing/story-5-protocole-seance.md`.
+   L'espace reçoit `.claude/settings.json` (mode `dontAsk`, lectures et écritures bloquées hors de l'espace, liste blanche `uv run --project <dépôt> slm-weight-editing run-batch|session-status|run-script`, règles `deny` des commandes de lecture et d'exécution génériques, du web, des sous-agents et de MCP, `claudeMdExcludes` des CLAUDE.md et AGENTS.md parents), `CONSIGNE.md` et `CLAUDE.md` rendus pour la séance, `scripts/`, `notes/`, `data/` (copie des fichiers train) et `sessions/s1/` (séance du harnais, `work/` compris). Le chemin du dépôt n'est écrit que là.
+2. Lancement depuis l'espace, sans serveur MCP : `claude --strict-mcp-config`. Avant le premier message, vérifier `/permissions` (mode `dontAsk`, les six règles `allow` de commande, les `deny`) et `/memory` (seul le `CLAUDE.md` de l'espace, plus le `CLAUDE.md` personnel de `~/.claude/`, que `claudeMdExcludes` ne couvre pas). Premier message : « Lis CONSIGNE.md et suis-la. »
+3. Pendant la séance, l'éditeur exécute ses scripts par `run-script scripts/<nom>.py --session s1 --sessions-root sessions` : `python -I` isolé, environnement purgé, lecture de `work/`, `scripts/` et `data/` seulement, écriture de `work/` et `scripts/`, bibliothèque standard, numpy et `safetensors.numpy` (version Python pure, bfloat16 en `uint16`) ; tout autre import, sous-processus, socket, ctypes, lien ou fichier hors de ces dossiers arrête le script (code 3). Chaque exécution tient le verrou de séance, ne consomme pas de lot et ajoute au journal un événement `script` (sha256, copie dans `sessions/s1/scripts/`, code de retour, sortie tronquée à 20 000 octets).
+4. Gel par Anaël (`session-freeze --session s1 --sessions-root %USERPROFILE%\seances\s1\sessions ...`), puis audit de la transcription (`~/.claude/projects/<projet de l'espace>/<id>.jsonl`, sous-agents compris) :
+
+   ```
+   uv run slm-weight-editing audit-session <transcription>.jsonl --workspace %USERPROFILE%\seances\s1 --session-dir %USERPROFILE%\seances\s1\sessions\s1 --reference-from <checkpoint de la révision publiée> --base-revision <révision> --write-reference <référence>.json
+   ```
+
+   `--workspace`, `--session-dir` et la référence (`--reference` ou `--reference-from`) sont obligatoires ; la base de la ligne `open` est comparée à la révision publiée (tenseurs et autres fichiers). Code 0 : aucune violation ; code 1 : violations, une par ligne (`fichier:ligne · règle · outil · détail`) ; code 2 : entrée illisible. Toute commande hors liste blanche, toute lecture hors de l'espace, toute transcription vide et tout script refusé par `run-script` font échouer l'audit ; les copies des scripts lancés sont auditées comme le reste.
