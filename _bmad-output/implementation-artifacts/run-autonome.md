@@ -52,3 +52,4 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 - 2026-11-04 08:43 · 6 · second-avis · 2 medium, 7 low · —
 - 2026-11-04 08:43 · 6 · review · lancée (Opus, passe 1) · —
 - 2026-11-04 08:43 · 3 · dev · fini, 21 tests (39 cas), suite verte, torch 2.15.0 +cpu sous Linux · 33b924c
+- 2026-11-04 08:44 · 6 · review · passe 1 : 2 Important corrigés, 5 low corrigés · d9929d9
