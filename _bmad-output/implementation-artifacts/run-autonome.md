@@ -53,3 +53,8 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 - 2026-11-04 08:43 · 6 · review · lancée (Opus, passe 1) · —
 - 2026-11-04 08:43 · 3 · dev · fini, 21 tests (39 cas), suite verte, torch 2.15.0 +cpu sous Linux · 33b924c
 - 2026-11-04 08:44 · 6 · review · passe 1 : 2 Important corrigés, 5 low corrigés · d9929d9
+- 2026-11-04 08:45 · 6 · PR · #6 ouverte · d9929d9
+- 2026-11-04 08:45 · 6 · review · passe 2 lancée (correctifs de la passe 1) · —
+- 2026-11-04 08:45 · 3 · second-avis · 4 high (budget contournable, compteur après journal, gel sans verrou), 3 medium, 2 low · —
+- 2026-11-04 08:45 · 3 · review · passe 1 lancée (Opus) · —
+- 2026-11-04 08:45 · 3 · décision · falsification manuelle de state.json et du journal renvoyée à l'audit de la story 5 (exigence notée dans story-3-harnais.md) · —
