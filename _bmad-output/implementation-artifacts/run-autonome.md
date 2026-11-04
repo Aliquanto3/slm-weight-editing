@@ -85,3 +85,5 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 - 2026-11-04 09:15 · 1.4 · review · passe 2 : 0 Important, 2 low corrigés (nom d'utilisateur depuis C:\, garde de type) · 9d352e2
 - 2026-11-04 09:15 · 1.4 · CI · verte sur les trois OS · 9d352e2
 - 2026-11-04 09:15 · 1.4 · fusion · #8 fusionnée, MERGED vérifié · 0fc353b
+- 2026-11-04 09:19 · 1.5 · dev · fini, 240 tests verts (73 cas de violation), merge de main 0fc353b · d075517
+- 2026-11-04 09:19 · 1.5 · second-avis · lancé, avec vérification de la syntaxe des permissions dans la doc officielle · —
