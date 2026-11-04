@@ -99,3 +99,6 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 - 2026-11-04 10:09 · 1.5 · review · passe 1 : 4 Important corrigés (workspace.json, noms normalisés, copie exécutée, options auditées) · 18535f2
 - 2026-11-04 10:09 · 1.5 · PR · #9 ouverte · 18535f2
 - 2026-11-04 10:09 · 1.5 · review · passe 2 lancée · —
+- 2026-11-04 10:14 · 1.5 · review · passe 2 : 0 Important, 1 low corrigé (abréviation argparse), 1 low reporté (Workspace.json en casse mixte, à vérifier par Anaël) · 697e5ba
+- 2026-11-04 10:14 · 1.5 · CI · verte sur les trois OS · 697e5ba
+- 2026-11-04 10:14 · 1.5 · fusion · #9 fusionnée, MERGED vérifié · c9496a5
