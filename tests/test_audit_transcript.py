@@ -1,4 +1,4 @@
-"""Audit de séance (story 5) : transcriptions synthétiques au format Claude Code, réglages, consigne."""
+"""Audit de séance (story 5) : transcriptions synthétiques au format Claude Code, consigne."""
 
 from __future__ import annotations
 
@@ -207,6 +207,12 @@ VIOLATIONS = [
     (
         "Bash",
         {"command": "uv run slm-weight-editing session-freeze --session s1 --original b"},
+        "gel-seance",
+    ),
+    ("Write", {"file_path": "f.py", "content": "freeze.freeze_session('s1', 'b')"}, "gel-seance"),
+    (
+        "Bash",
+        {"command": "uv run slm-weight-editing apply-diff --diff d --original b --out o"},
         "commande-hors-liste",
     ),
     ("Bash", {"command": "uv run slm-weight-editing --help"}, "commande-hors-liste"),
@@ -541,5 +547,8 @@ def test_consigne_states_protocol():
         "heldout/",
     ):
         assert needle in text, needle
-    # Le paragraphe du plafond est isolé.
+    # Plafond aligné sur la constante du harnais, dans un paragraphe isolé.
+    from slm_weight_editing.harness import MAX_CHANGED_SHARE
+
+    assert f"{round(MAX_CHANGED_SHARE * 100)} %" in text
     assert re.search(r"## Plafond du diff\n\n[^\n]+10 %[^\n]+\n\n## ", text)

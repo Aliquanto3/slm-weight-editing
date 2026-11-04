@@ -24,12 +24,13 @@ RULES = {
     "outil-non-autorise": "outil hors de la liste des outils de séance",
     "web": "accès web (WebFetch, WebSearch, MCP, client réseau)",
     "sous-agent": "sous-agent lancé (sa transcription échappe aux règles de séance)",
-    "lecture-interdite": "lecture d'un chemin interdit (heldout, banc, journaux ou modèle de référence)",
+    "lecture-interdite": "lecture d'un chemin interdit (heldout, banc, journaux de référence)",
     "modele-hors-harnais": "exécution ou chargement du modèle hors des sous-commandes du harnais",
     "api-harnais": "module interne du dépôt appelé hors de la liste blanche",
     "etat-seance": "écriture, déplacement ou suppression de l'état de séance hors du harnais",
     "harnais-modifie": "modification du harnais, de l'environnement ou des réglages de séance",
     "ouverture-seance": "ouverture de séance par l'agent (réservée à Anaël)",
+    "gel-seance": "gel de séance par l'agent (réservé à Anaël)",
     "commande-hors-liste": "sous-commande slm-weight-editing hors de run-batch et session-status",
     "git": "commande git ou gh (historique du dépôt)",
     "installation": "installation ou synchronisation de paquets",
@@ -139,6 +140,7 @@ _CLI_IMPORT = re.compile(
     r"(?:from|import)\s+slm_weight_editing(?:\.(\w+))?(?:\s+import\s+([\w \t,()]+))?"
 )
 _OPEN = re.compile(r"session-open|open_session|open-session")
+_FREEZE = re.compile(r"session-freeze|freeze_session")
 
 
 @dataclass(frozen=True)
@@ -237,9 +239,11 @@ def _check_code(text: str, tool: str, shell: bool) -> list[tuple[str, str]]:
     stripped = _HARMLESS_REDIRECT.sub(" ", norm)
     if _OPEN.search(norm):
         found.append(("ouverture-seance", _OPEN.search(norm).group(0)))
+    if _FREEZE.search(norm):
+        found.append(("gel-seance", _FREEZE.search(norm).group(0)))
     for m in _CLI.finditer(norm):
         sub = m.group(1)
-        if sub not in ALLOWED_SUBCOMMANDS and not _OPEN.search(sub):
+        if sub not in ALLOWED_SUBCOMMANDS and not _OPEN.search(sub) and not _FREEZE.search(sub):
             found.append(("commande-hors-liste", f"sous-commande « {sub or '(aucune)'} »"))
     for m in _CLI_IMPORT.finditer(norm):
         if m.group(1):

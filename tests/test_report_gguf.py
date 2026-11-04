@@ -92,7 +92,8 @@ def test_diff_is_verifiable(synth, tmp_path):
         "ok": True,
         "target_originals_checked": False,
     }
-    assert diff["base"]["revision"] == WSP_BASE_REVISION
+    # sha256 fournis sans provenance : le diff ne se prétend pas être l'édition du MIT
+    assert diff["base"] == {"repo": None, "revision": None} and diff["edit"] == {"repo": None}
     assert diff["apply"] == "cmd"
     assert diff["ollama_create"].startswith("ollama create qwen3.5-wsp:0.8b -f ")
 

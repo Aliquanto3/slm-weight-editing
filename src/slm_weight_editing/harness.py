@@ -41,6 +41,13 @@ JOURNAL_FILE = "journal.jsonl"
 WORK_DIR = "work"
 LOCK_FILE = "session.lock"
 REGISTRY_FILE = "registry.jsonl"
+# Plafond du gel (story 4) : part maximale d'éléments changés par tenseur. Décision du
+# 2026-11-04 : éditions creuses imposées par la consigne de séance.
+MAX_CHANGED_SHARE = 0.10
+CEILING_NOTE = (
+    f"Plafond du gel : au plus {MAX_CHANGED_SHARE:.0%} des éléments de chaque tenseur "
+    "modifiés (au-delà, session-freeze refuse le diff ; éditions creuses seulement)"
+)
 _REPLACE_RETRIES = 20
 _REPLACE_DELAY = 0.1
 _SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -501,6 +508,7 @@ def run(args: argparse.Namespace) -> int:
                 sessions_root=args.sessions_root,
             )
             print(f"Séance {state.session_id} ouverte : budget {state.budget} lots")
+            print(CEILING_NOTE)
         elif args.command == "run-batch":
             entry = run_batch(
                 args.session,
@@ -523,6 +531,7 @@ def run(args: argparse.Namespace) -> int:
                 f"Séance {state.session_id} : {used}/{state.budget} lots, "
                 f"reste {state.budget - used}, gelée : {'oui' if state.frozen else 'non'}"
             )
+            print(CEILING_NOTE)
     except HarnessError as exc:
         print(f"Erreur : {exc}", file=sys.stderr)
         return exc.exit_code
