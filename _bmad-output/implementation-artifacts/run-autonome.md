@@ -58,3 +58,6 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 - 2026-11-04 08:45 · 3 · second-avis · 4 high (budget contournable, compteur après journal, gel sans verrou), 3 medium, 2 low · —
 - 2026-11-04 08:45 · 3 · review · passe 1 lancée (Opus) · —
 - 2026-11-04 08:45 · 3 · décision · falsification manuelle de state.json et du journal renvoyée à l'audit de la story 5 (exigence notée dans story-3-harnais.md) · —
+- 2026-11-04 08:47 · 6 · review · passe 2 : 0 constat · 9e4a6ca
+- 2026-11-04 08:47 · 6 · CI · verte sur les trois OS · 9e4a6ca
+- 2026-11-04 08:47 · 6 · fusion · #6 fusionnée, MERGED vérifié · c6011ff
