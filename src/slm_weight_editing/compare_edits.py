@@ -5,8 +5,9 @@ et des directions principales (premiers vecteurs singuliers du delta), puis, si 
 de slm-quality-bench (`qb.report/1`) sont fournis, écart de score et de taux tronqué par piste et
 par catégorie (usage), avec intervalles de confiance.
 
-Méthode des intervalles : taux tronqué = Wilson (95 %) ; score = intervalle du résumé du banc
-(Wilson pour un score binaire, normal groupé sinon). Écart entre deux modèles traités comme
+Méthode des intervalles : taux tronqué = Wilson (95 %) ; score = intervalle `ci_low`/`ci_high`
+repris tel quel du résumé du banc (calculé par le banc, non recalculé ici).
+Écart entre deux modèles traités comme
 indépendants : méthode de Newcombe (MOVER), `d - sqrt((p1 - l1)^2 + (u2 - p2)^2)` pour la borne
 basse et `d + sqrt((u1 - p1)^2 + (p2 - l2)^2)` pour la haute. Les résumés de deux campagnes n'ont
 pas d'appariement : l'intervalle est donc conservateur.
@@ -88,7 +89,12 @@ def cosine(a: np.ndarray, b: np.ndarray) -> float | None:
 
 
 def principal_directions(delta: np.ndarray) -> tuple[np.ndarray, np.ndarray] | None:
-    """Premiers vecteurs singuliers (gauche, droit) du delta, ou None si de rang 0."""
+    """Premiers vecteurs singuliers (gauche, droit) du delta, ou None si de rang 0.
+
+    Réservé aux tenseurs d'au moins 2 dimensions (voir `compare_deltas` pour les autres).
+    """
+    if delta.ndim < 2:
+        raise CompareError("directions principales : tenseur d'au moins 2 dimensions attendu")
     if not np.any(delta):
         return None
     mat = delta.reshape(delta.shape[0], -1) if delta.ndim != 2 else delta
@@ -127,6 +133,15 @@ def compare_deltas(
             "right_cosine": None,
             "note": None,
         }
+        if da.ndim < 2:
+            # Biais, normes, scalaires : pas de direction principale (le droit vaudrait 1.0).
+            entry["note"] = "tenseur 1-D : directions principales n/a"
+            shared.append(entry)
+            continue
+        if not (np.all(np.isfinite(da)) and np.all(np.isfinite(db))):
+            entry["note"] = "delta non fini (NaN ou inf) : directions non définies"
+            shared.append(entry)
+            continue
         pa, pb = principal_directions(da), principal_directions(db)
         if pa is None or pb is None:
             who = "A et B" if pa is None and pb is None else ("A" if pa is None else "B")
@@ -231,10 +246,21 @@ def read_summary(path: str | Path, tag: str | None) -> dict[tuple[str, str], dic
 
 
 def compare_summaries(a: dict[tuple[str, str], dict], b: dict[tuple[str, str], dict]) -> list[dict]:
+    """Une ligne par (piste, catégorie) de A ou de B ; `missing` vaut "A" ou "B" si absente."""
     rows = []
-    for key in sorted(set(a) & set(b)):
+    for key in sorted(set(a) | set(b)):
+        row: dict = {
+            "track": key[0],
+            "category": key[1],
+            "score": None,
+            "truncation": None,
+            "missing": None,
+        }
+        if key not in a or key not in b:
+            row["missing"] = "A" if key not in a else "B"
+            rows.append(row)
+            continue
         ea, eb = a[key], b[key]
-        row: dict = {"track": key[0], "category": key[1], "score": None, "truncation": None}
         if all(e[k] is not None for e in (ea, eb) for k in ("mean", "ci_low", "ci_high")):
             d, lo, hi = newcombe_diff(
                 (ea["mean"], ea["ci_low"], ea["ci_high"]),
@@ -312,6 +338,13 @@ def render_markdown(result: dict, label_a: str, label_b: str) -> str:
             "|---|---|---|---|---|---|",
         ]
         for r in bench:
+            if r["missing"] is not None:
+                lab = label_a if r["missing"] == "A" else label_b
+                absent = f"absente de {lab}"
+                lines.append(
+                    f"| {r['track']} | {r['category']} | {absent} | n/d | {absent} | n/d |"
+                )
+                continue
             s, t = r["score"], r["truncation"]
             sc = "n/d" if s is None else f"{_f(s['a'], 3)} / {_f(s['b'], 3)}"
             sd = (
@@ -329,7 +362,7 @@ def render_markdown(result: dict, label_a: str, label_b: str) -> str:
             lines.append(f"| {r['track']} | {r['category']} | {sc} | {sd} | {tr} | {td} |")
         if not bench:
             lines.append("")
-            lines.append("Aucune piste ni catégorie commune aux deux résumés.")
+            lines.append("Aucune piste ni catégorie dans les résumés.")
     return "\n".join(lines) + "\n"
 
 
@@ -344,6 +377,10 @@ def compare(
 ) -> tuple[dict, str]:
     if len(summaries) > 2:
         raise CompareError("au plus deux summary.json")
+    if not summaries and any(t is not None for t in tags):
+        raise CompareError("--tag-a/--tag-b sans --summary")
+    if len(summaries) == 1 and (None in tags or tags[0] == tags[1]):
+        raise CompareError("un seul summary.json : --tag-a et --tag-b distincts requis")
     result: dict = {
         "labels": {"a": label_a, "b": label_b},
         "weights": compare_checkpoints(original, edit_a, edit_b),
@@ -358,6 +395,8 @@ def compare(
 
 def write_report(result: dict, markdown: str, out: str | Path) -> tuple[Path, Path]:
     out = Path(out)
+    if out.suffix.lower() == ".json":
+        raise CompareError("--out désigne le rapport Markdown, pas le .json (écrit à côté)")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(markdown, encoding="utf-8")
     js = out.with_suffix(".json")

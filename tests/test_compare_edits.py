@@ -279,3 +279,72 @@ def test_single_summary_with_two_tags(tmp_path):
     assert r["score"]["diff"] == pytest.approx(-0.2)
     with pytest.raises(CompareError, match="au plus deux"):
         compare(paths["orig"], paths["a"], paths["b"], summaries=[s, s, s])
+
+
+def test_newcombe_published_example():
+    # Newcombe (1998), méthode 10 : 56/70 contre 48/80 -> [0.0524 ; 0.3339].
+    d, lo, hi = newcombe_diff(wilson(56, 70), wilson(48, 80))
+    assert (round(d, 4), round(lo, 4), round(hi, 4)) == (0.2, 0.0524, 0.3339)
+
+
+def test_one_dimensional_and_scalar_deltas_have_no_direction():
+    a = {"bias": np.array([1.0, 0, 0, 2]), "scale": np.array(3.0)}
+    b = {"bias": np.array([0.0, 3, -1, 0.5]), "scale": np.array(-1.0)}
+    rows = {c["name"]: c for c in compare_deltas(a, b, 5)["common"]}
+    for name in ("bias", "scale"):
+        assert rows[name]["left_cosine"] is None and rows[name]["right_cosine"] is None
+        assert "n/a" in rows[name]["note"]
+    assert rows["bias"]["flat_cosine"] == pytest.approx(1.0 / (math.sqrt(5) * math.sqrt(10.25)))
+    with pytest.raises(CompareError):
+        principal_directions(np.array([1.0, 2.0]))
+
+
+def test_non_finite_delta_noted_without_crash():
+    a = {"w": np.array([[np.nan, 1.0], [0.0, 1.0]])}
+    b = {"w": np.array([[1.0, 0.0], [0.0, 1.0]])}
+    (c,) = compare_deltas(a, b, 4)["common"]
+    assert c["left_cosine"] is None and "non fini" in c["note"]
+
+
+def test_track_or_category_missing_on_one_side(tmp_path):
+    paths = make(tmp_path, {(W1, (0, 0)): 1.0}, {(W1, (0, 0)): 2.0})
+    s1, s2 = tmp_path / "s1.json", tmp_path / "s2.json"
+    full = summary({"edit-a": (0.5, 0.1)})
+    partial = summary({"edit-b": (0.4, 0.3)})
+    partial["tracks"] = partial["tracks"][:1]  # pas de piste rag pour B
+    partial["tracks"][0]["scopes"] = partial["tracks"][0]["scopes"][:1]  # ni de catégorie
+    s1.write_text(json.dumps(full), encoding="utf-8")
+    s2.write_text(json.dumps(partial), encoding="utf-8")
+    from slm_weight_editing.compare_edits import compare
+
+    res, md = compare(paths["orig"], paths["a"], paths["b"], summaries=[s1, s2], label_b="MIT")
+    rows = {(r["track"], r["category"]): r for r in res["bench"]}
+    assert rows[("rag", "global")]["missing"] == "B"
+    assert rows[("chat", "redaction")]["missing"] == "B"
+    assert rows[("chat", "global")]["missing"] is None
+    assert md.count("absente de MIT") == 4  # deux lignes, deux colonnes chacune
+    res2, md2 = compare(paths["orig"], paths["a"], paths["b"], summaries=[s2, s1])
+    assert {(r["track"], r["category"]) for r in res2["bench"] if r["missing"] == "A"} == {
+        ("rag", "global"),
+        ("chat", "redaction"),
+    }
+
+
+def test_tags_and_out_misuse_rejected(tmp_path, capsys):
+    paths = make(tmp_path, {(W1, (0, 0)): 1.0}, {(W1, (0, 0)): 2.0})
+    s = tmp_path / "s.json"
+    s.write_text(json.dumps(summary({"x": (0.5, 0.1)})), encoding="utf-8")
+    from slm_weight_editing.compare_edits import compare
+
+    with pytest.raises(CompareError, match="sans --summary"):
+        compare(paths["orig"], paths["a"], paths["b"], tags=("x", None))
+    with pytest.raises(CompareError, match="distincts"):
+        compare(paths["orig"], paths["a"], paths["b"], summaries=[s])
+    with pytest.raises(CompareError, match="distincts"):
+        compare(paths["orig"], paths["a"], paths["b"], summaries=[s], tags=("x", "x"))
+    out = tmp_path / "r.json"
+    rc = slm_weight_editing.main(
+        ["compare-edits", "--original", str(paths["orig"]), "--edit-a", str(paths["a"])]
+        + ["--edit-b", str(paths["b"]), "--out", str(out)]
+    )
+    assert rc == 1 and not out.exists() and "Markdown" in capsys.readouterr().err
