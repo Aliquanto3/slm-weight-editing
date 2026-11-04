@@ -484,6 +484,12 @@ def test_public_path_keeps_paths_under_the_working_directory_relative():
     assert freeze.public_path("models/hf/q") == "models/hf/q"
 
 
+def test_public_path_hides_user_name_when_cwd_is_above_home(monkeypatch):
+    home = Path.home().resolve()
+    monkeypatch.chdir(home.anchor)
+    assert freeze.public_path(str(home / "models" / "q")) == ".../q"
+
+
 def test_whole_freeze_runs_under_the_session_lock(sess, monkeypatch):
     real = freeze.compute_tensor_diff
     seen = []

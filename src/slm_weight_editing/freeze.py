@@ -163,10 +163,12 @@ def public_path(value: str) -> str:
     path = Path(value)
     if not path.is_absolute():
         return public_text(path.as_posix())
-    try:
-        return path.relative_to(Path.cwd().resolve()).as_posix()
-    except ValueError:
-        return f".../{path.name}"
+    cwd, home = Path.cwd().resolve(), Path.home().resolve()
+    # Un dossier courant au-dessus du dossier personnel (racine du disque, /home) laisserait
+    # le nom d'utilisateur dans le chemin relatif : on masque alors comme hors du dossier.
+    if path.is_relative_to(cwd) and (cwd.is_relative_to(home) or not path.is_relative_to(home)):
+        return path.relative_to(cwd).as_posix()
+    return f".../{path.name}"
 
 
 def public_journal(raw: bytes) -> bytes:
@@ -342,9 +344,9 @@ def _is_int(value: object) -> bool:
 
 def _check_entry(entry: object, size: int) -> None:
     """Structure d'une entrée : types, numel = produit de la forme, plages dans diff.bin."""
-    name = entry.get("name") if isinstance(entry, dict) else None
-    if not isinstance(name, str):
+    if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
         raise DiffError(f"entrée de diff invalide : {entry!r:.80}")
+    name = entry["name"]
     shape, numel, n = entry.get("shape"), entry.get("numel"), entry.get("changed")
     if not isinstance(shape, list) or not all(_is_int(d) for d in shape):
         raise DiffError(f"{name} : forme invalide dans le diff")

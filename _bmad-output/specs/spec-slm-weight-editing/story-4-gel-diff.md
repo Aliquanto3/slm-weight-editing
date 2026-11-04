@@ -39,3 +39,11 @@ Base à jour (main 64d6b78, aucun rebase). Second avis Haiku repris point par po
 - Nit · low · second avis n° 8 · corrigé : un échec après la pose du gel (work/ changé, écriture du diff) dit « séance déjà gelée, relancer session-freeze pour écrire le diff » ; test `test_failed_write_after_freeze_says_how_to_resume`.
 - Nit · low · second avis n° 5 · documenté : un tenseur de 9 éléments ou moins ne peut changer d'aucun élément ; conséquence assumée de la décision du plafond (docstring de `freeze`, README).
 - Nit · low · second avis n° 9 · rejeté : changement voulu par la spec (des sha256 fournis sans provenance ne se disent plus l'édition du MIT) ; l'assertion modifiée et `test_default_report_still_describes_the_mit_edit` couvrent les deux cas.
+
+### Passe 2 (2026-11-04, SHA revu c70c58f)
+
+Relecture des seuls correctifs de la passe 1 (`git show c70c58f`), base à jour (main 64d6b78). Les correctifs tiennent : le journal ne porte de chemin que dans `base_checkpoint` et `data_path` (`settings`, `problems`, `outputs` sans chemin ; l'événement `freeze` est écrit après la publication), le verrou tenu par `__enter__`/`__exit__` est bien relâché sur exception, `load_diff` refuse les entrées mal formées, les tests du harnais passent avec le plafond déplacé. Complexité : 0 constat.
+
+- Nit · low · reviewer · corrigé : `public_path` gardait un chemin relatif quand le dossier courant est au-dessus du dossier personnel (racine du disque, `/home`) : `Users/<nom>/models/base` publié, nom d'utilisateur compris, sans préfixe que `public_text` sache masquer. Ce cas donne maintenant `.../<nom>` ; test `test_public_path_hides_user_name_when_cwd_is_above_home`.
+- Nit · low · reviewer · corrigé : `_check_entry` appelait `.get` sur un `object` non restreint (signalé par Pyright) ; garde `isinstance(entry, dict)` explicite, comportement inchangé.
+- Nit · low · reviewer · noté : le journal publié dépend du dossier courant au gel (relatif dessous, `.../<nom>` ailleurs), donc son sha256 aussi ; sans effet sur la vérification, puisque `diff.json` porte le sha256 de la version publiée, et le gel est unique par séance.
