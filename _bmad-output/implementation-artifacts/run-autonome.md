@@ -63,3 +63,7 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 - 2026-11-04 08:47 · 1.6 · fusion · #6 fusionnée, MERGED vérifié · c6011ff
 - 2026-11-04 08:48 · 1.7 · attente humaine · attend la séance d'édition d'Anaël (après 1.5) · —
 - 2026-11-04 08:48 · run · décision · stories renumérotées 1.N pour le suivi, sprint-status.yaml ajouté · —
+- 2026-11-04 08:51 · 1.3 · review · passe 1 : 4 high, 2 medium, 2 low corrigés ; n° 6 reporté à 1.5 · 774e143
+- 2026-11-04 08:51 · 1.3 · décision · push forcé refusé par le classifieur ; branche rebasée poussée sous feat/harnais-budget-rebase · 774e143
+- 2026-11-04 08:51 · 1.3 · PR · #7 ouverte · 774e143
+- 2026-11-04 08:51 · 1.3 · review · passe 2 lancée · —
