@@ -26,7 +26,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     rep.add_argument("--checkpoint", required=True, help="dossier ou fichier safetensors édité")
     rep.add_argument(
-        "--base-checkpoint", help="checkpoint de base (contrôle de fidélité des originaux visés)"
+        "--base-checkpoint",
+        required=True,
+        help="checkpoint de base : contrôle de fidélité des originaux visés (CAP-1), sha256 avant",
     )
     rep.add_argument("--model", default=WSP_SOURCE_MODEL, help="modèle Ollama officiel")
     rep.add_argument("--tag", default=WSP_TAG, help="tag du modèle édité")
@@ -83,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
     except ReportError as exc:
         print(f"Erreur : {exc}", file=sys.stderr)
         return exc.exit_code
-    except (GGUFError, OllamaStoreError, SafetensorsError) as exc:
+    except (GGUFError, OllamaStoreError, SafetensorsError, OSError) as exc:
         print(f"Erreur : {exc}", file=sys.stderr)
         return 1
     print(f"GGUF édité : {result.gguf}")

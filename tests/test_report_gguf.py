@@ -85,7 +85,13 @@ def test_diff_is_verifiable(synth, tmp_path):
     assert entry["gguf_blocks_changed"] == 8
     assert diff["gguf"]["source_sha256"] == hashlib.sha256(official).hexdigest()
     assert diff["gguf"]["output_sha256"] == hashlib.sha256(result.gguf.read_bytes()).hexdigest()
-    assert diff["fidelity"] == {"intermediate": "f32", "controls": 2, "passed": 2, "ok": True}
+    assert diff["fidelity"] == {
+        "intermediate": "f32",
+        "controls": 2,
+        "passed": 2,
+        "ok": True,
+        "target_originals_checked": False,
+    }
     assert diff["base"]["revision"] == WSP_BASE_REVISION
     assert diff["apply"] == "cmd"
     assert diff["ollama_create"].startswith("ollama create qwen3.5-wsp:0.8b -f ")
@@ -209,6 +215,8 @@ def test_cli_refuses_a_checkpoint_without_the_published_sha(tmp_path, capsys):
             "report-gguf",
             "--checkpoint",
             str(s.checkpoint),
+            "--base-checkpoint",
+            str(s.base_checkpoint),
             "--ollama-models",
             str(s.store),
             "--out",
@@ -222,7 +230,15 @@ def test_cli_refuses_a_checkpoint_without_the_published_sha(tmp_path, capsys):
 
 def test_cli_reports_a_missing_manifest(tmp_path, capsys):
     code = slm_weight_editing.main(
-        ["report-gguf", "--checkpoint", str(tmp_path), "--ollama-models", str(tmp_path)]
+        [
+            "report-gguf",
+            "--checkpoint",
+            str(tmp_path),
+            "--base-checkpoint",
+            str(tmp_path),
+            "--ollama-models",
+            str(tmp_path),
+        ]
     )
     assert code == 1
     assert "manifeste de qwen3.5:0.8b introuvable" in capsys.readouterr().err
@@ -288,7 +304,45 @@ def test_cli_reports_an_unreadable_manifest(synth, tmp_path, capsys):
     manifest = synth.store / "manifests" / "registry.ollama.ai" / "library" / "qwen3.5" / "0.8b"
     manifest.write_text("{pas du json", "utf-8")
     code = slm_weight_editing.main(
-        ["report-gguf", "--checkpoint", str(synth.checkpoint), "--ollama-models", str(synth.store)]
+        [
+            "report-gguf",
+            "--checkpoint",
+            str(synth.checkpoint),
+            "--base-checkpoint",
+            str(synth.base_checkpoint),
+            "--ollama-models",
+            str(synth.store),
+        ]
     )
     assert code == 1
     assert "illisible" in capsys.readouterr().err
+
+
+def test_cli_requires_the_base_checkpoint(synth, capsys):
+    with pytest.raises(SystemExit) as exc:
+        slm_weight_editing.main(["report-gguf", "--checkpoint", str(synth.checkpoint)])
+    assert exc.value.code == 2
+    assert "--base-checkpoint" in capsys.readouterr().err
+
+
+def test_cli_reports_an_undecodable_license(tmp_path, capsys):
+    s = build(tmp_path)
+    manifest = s.store / "manifests" / "registry.ollama.ai" / "library" / "qwen3.5" / "0.8b"
+    data = json.loads(manifest.read_text("utf-8"))
+    (layer,) = [x for x in data["layers"] if x["mediaType"].endswith(".license")]
+    (s.store / "blobs" / layer["digest"].replace(":", "-")).write_bytes(bytes([0xFF, 0xFE, 0xFA]))
+    code = slm_weight_editing.main(
+        [
+            "report-gguf",
+            "--checkpoint",
+            str(s.checkpoint),
+            "--base-checkpoint",
+            str(s.base_checkpoint),
+            "--ollama-models",
+            str(s.store),
+            "--out",
+            str(tmp_path / "out"),
+        ]
+    )
+    assert code == 1
+    assert "couche license" in capsys.readouterr().err

@@ -14,7 +14,9 @@ BLOCK_BYTES = 2 + QK8_0
 _BLOCK_DTYPE = np.dtype([("d", "<f2"), ("qs", "i1", (QK8_0,))])
 
 # Passage intermédiaire avant quantification : float32 direct (llama.cpp) ou float16 (un export
-# F16 puis quantifié). Le contrôle de fidélité dit lequel redonne les octets de l'officiel.
+# F16 puis quantifié). Le contrôle de fidélité dit si le passage choisi redonne les octets de
+# l'officiel ; sur des poids réalistes, les deux passages donnent presque toujours les mêmes
+# octets, et le contrôle ne les départage donc pas.
 INTERMEDIATES = ("f32", "f16")
 
 

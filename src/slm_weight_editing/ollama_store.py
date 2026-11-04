@@ -94,13 +94,18 @@ def load_model(model: str, store: str | Path | None = None) -> OllamaModel:
         raise OllamaStoreError(f"blob GGUF {digest} absent du magasin {root}")
 
     def text(kind: str) -> str | None:
-        return _read_blob(root, layers[kind]["digest"]).decode("utf-8") if kind in layers else None
+        if kind not in layers:
+            return None
+        try:
+            return _read_blob(root, layers[kind]["digest"]).decode("utf-8")
+        except (UnicodeDecodeError, KeyError, TypeError) as exc:
+            raise OllamaStoreError(f"couche {kind} de {model} illisible : {exc}") from exc
 
     try:
         params = (
             json.loads(_read_blob(root, layers["params"]["digest"])) if "params" in layers else {}
         )
-    except ValueError as exc:
+    except (ValueError, KeyError, TypeError) as exc:
         raise OllamaStoreError(f"paramètres de {model} illisibles : {exc}") from exc
     return OllamaModel(
         model=model,

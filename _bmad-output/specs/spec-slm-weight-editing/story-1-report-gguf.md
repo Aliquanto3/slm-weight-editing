@@ -9,9 +9,9 @@ capabilities: [CAP-1, CAP-2, CAP-3]
 
 ## Livré
 
-- Commande `slm-weight-editing report-gguf --checkpoint <dossier safetensors>` (options `--base-checkpoint`, `--ollama-models`, `--model`, `--tag`, `--out`, `--intermediate f32|f16`). Sorties sous `models/qwen3.5-wsp-0.8b/` : GGUF édité, `Modelfile`, `diff.json`, `fidelite.json`.
+- Commande `slm-weight-editing report-gguf --checkpoint <dossier safetensors> --base-checkpoint <base>` (base obligatoire depuis la passe 2 de revue ; options `--ollama-models`, `--model`, `--tag`, `--out`, `--intermediate f32|f16`). Sorties sous `models/qwen3.5-wsp-0.8b/` : GGUF édité, `Modelfile`, `diff.json`, `fidelite.json`.
 - Ordre : sha256 des octets bf16 bruts des deux tenseurs de RikiyaT (code 3 si faux), puis contrôle de fidélité (code 2 en échec, aucun GGUF écrit, écart par tenseur dans `fidelite.json` : blocs, échelles, quanta, octets, premiers blocs avec ligne et colonne), puis copie du GGUF officiel avec réécriture des seules plages d'octets visées (fichier `.partial` renommé à la fin).
-- Témoins du contrôle de fidélité : tous les `down_proj` non visés du checkpoint édité ; en plus, les originaux des tenseurs visés si la base est fournie. Aucun témoin : échec.
+- Témoins du contrôle de fidélité : tous les `down_proj` non visés du checkpoint édité ; et les originaux des tenseurs visés, tirés de la base (obligatoire en CLI ; `diff.json` indique `target_originals_checked`). Aucun témoin : échec.
 - Q8_0 en numpy, comme `quantize_row_q8_0_ref` de ggml ; identique à `gguf.quants` (gguf-py, dépendance de dev) sur les tests.
 - Modelfile : `FROM` chemin absolu du GGUF édité, `TEMPLATE`/`SYSTEM` s'ils existent, `RENDERER` et `PARSER` du blob de configuration, `PARAMETER` de la couche params, `LICENSE`. Syntaxe reprise d'un `ollama show --modelfile` local (`RENDERER qwen3.5`, `PARSER qwen3.5`).
 
@@ -45,3 +45,14 @@ Base à jour (origin/main b718329), aucun rebase. Q8_0 vérifié contre `quantiz
 - Nit, low, revue : corrigé. La taille en octets d'un tenseur safetensors est comparée à sa forme ; avant, un écart produisait une erreur numpy non capturée.
 - Complexité : 0 constat (aucune structure qui grossit à l'exécution).
 - Report (inchangé) : contrôle de fidélité sur le vrai GGUF et le vrai checkpoint, à lancer par Anaël.
+
+### Passe 2 (2026-11-04, SHA revu 48264ad)
+
+Base à jour (origin/main b718329), aucun rebase. Relu 3acf3ae..48264ad et la nouvelle liste du second avis.
+
+- Important, medium, second avis n° 1 : corrigé. Sans `--base-checkpoint`, l'invocation par défaut ne requantifiait pas les originaux des deux tenseurs visés (CAP-1 : « chaque tenseur original ») et laissait `hf_bf16_sha256_before` à null (CAP-2). L'option est obligatoire en CLI, le README donne le téléchargement de la base à la révision publiée, et `diff.json` indique `fidelity.target_originals_checked`. L'API Python garde la base facultative (tests).
+- Nit, low, second avis n° 2 : corrigé (doc). Le commentaire de `INTERMEDIATES` disait que le contrôle désigne le bon passage ; il dit seulement si le passage choisi redonne l'officiel, f32 et f16 coïncidant presque toujours. Pas d'essai automatique des deux chaînes : `--intermediate f16` reste le recours documenté.
+- Nit, low, second avis n° 3 : corrigé. Une couche texte (licence, gabarit, système) non UTF-8 donne `OllamaStoreError` ; la CLI traduit aussi `OSError` en code 1 au lieu d'une trace. Test ajouté.
+- Nit, low, second avis n° 4 : rejeté, déjà traité en passe 1 (Modelfile local sous `models/`, ignoré par git, jamais publié ; le diff publié masque le dossier personnel).
+- Complexité : 0 constat.
+- Report (inchangé) : contrôle de fidélité sur le vrai GGUF et le vrai checkpoint, puis `ollama create` et `ollama show`, à lancer par Anaël.

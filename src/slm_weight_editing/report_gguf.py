@@ -382,7 +382,8 @@ def _report(
             "alignment": gguf.alignment,
             "data_offset": gguf.data_offset,
         },
-        "fidelity": {k: fidelity[k] for k in ("intermediate", "controls", "passed", "ok")},
+        "fidelity": {k: fidelity[k] for k in ("intermediate", "controls", "passed", "ok")}
+        | {"target_originals_checked": base is not None},
         "modelfile": {"renderer": official.renderer, "parser": official.parser},
         "apply": public_text(command) if command is not None else None,
         "ollama_create": public_text(f"ollama create {tag} -f {modelfile.as_posix()}"),

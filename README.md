@@ -20,24 +20,24 @@ Ce dépôt reproduit la démarche avec Claude, puis l'applique à d'autres SLM (
 
 L'outil remplace dans le GGUF officiel de `qwen3.5:0.8b` (Q8_0) les deux tenseurs édités par le MIT (`down_proj` des couches 15 et 19, devenus `blk.15.ffn_down.weight` et `blk.19.ffn_down.weight`), requantifiés en Q8_0. Il ne lance ni Ollama ni aucun téléchargement : il lit le magasin local d'Ollama (`~/.ollama/models`, ou `OLLAMA_MODELS`, ou `--ollama-models`) en lecture seule.
 
-1. Anaël télécharge le checkpoint édité (safetensors) dans `models/`, ignoré par git :
+1. Anaël télécharge dans `models/`, ignoré par git, le checkpoint édité et sa base (safetensors) ; la base sert à contrôler les originaux des deux tenseurs visés et donne leur sha256 avant édition :
 
    ```
    hf download RikiyaT/Qwen3.5-0.8B-weight-space-programming --local-dir models/hf/qwen3.5-wsp
+   hf download Qwen/Qwen3.5-0.8B --revision 2fc06364715b967f1860aea9cf38778875588b17 --local-dir models/hf/qwen3.5-base
    ```
 
-   Facultatif, pour contrôler aussi les originaux des tenseurs visés : la base `Qwen/Qwen3.5-0.8B` à la révision `2fc06364715b967f1860aea9cf38778875588b17`, dans `models/hf/qwen3.5-base`.
-
-2. Report, avec `qwen3.5:0.8b` déjà présent dans Ollama :
+2. Report, avec `qwen3.5:0.8b` déjà présent dans Ollama (`ollama pull qwen3.5:0.8b` au besoin) :
 
    ```
-   uv run slm-weight-editing report-gguf --checkpoint models/hf/qwen3.5-wsp
-   # option : --base-checkpoint models/hf/qwen3.5-base
+   uv run slm-weight-editing report-gguf --checkpoint models/hf/qwen3.5-wsp --base-checkpoint models/hf/qwen3.5-base
    ```
+
+   Options : `--ollama-models` (magasin), `--out` (défaut `models/qwen3.5-wsp-0.8b`), `--intermediate f16` (export F16 puis quantifié, si le contrôle de fidélité échoue en f32).
 
    Dans l'ordre, l'outil :
    - vérifie les sha256 des octets bf16 bruts des deux tenseurs publiés, et refuse le report s'ils diffèrent (code 3) ;
-   - fait le contrôle de fidélité : requantifier les tenseurs `down_proj` non édités du checkpoint (et les originaux visés si la base est fournie) doit redonner exactement leurs octets dans le GGUF officiel. En cas d'échec, il n'écrit aucun GGUF, rend le code 2 et décrit l'écart (tenseur, blocs, échelles, octets) dans `models/qwen3.5-wsp-0.8b/fidelite.json` ;
+   - fait le contrôle de fidélité : requantifier les tenseurs `down_proj` non édités du checkpoint et les originaux des deux tenseurs visés (base) doit redonner exactement leurs octets dans le GGUF officiel. En cas d'échec, il n'écrit aucun GGUF, rend le code 2 et décrit l'écart (tenseur, blocs, échelles, octets) dans `models/qwen3.5-wsp-0.8b/fidelite.json` ;
    - écrit dans `models/qwen3.5-wsp-0.8b/` le GGUF édité (identique à l'officiel hors des deux tenseurs), le `Modelfile` (renderer, parser, paramètres et licence de l'officiel) et `diff.json` (tenseurs touchés, sha256 avant et après côté HF et côté GGUF, révision de base, commande d'application).
 
 3. Anaël crée le modèle dans un terminal à part :
