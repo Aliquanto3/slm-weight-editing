@@ -146,6 +146,19 @@ def build(tmp_path: Path, tamper=None, **store_extra) -> Synth:
     return Synth(store, gguf_path, ckpt, base_dir, base, edited)
 
 
+@pytest.fixture(autouse=True)
+def no_real_cuda(monkeypatch):
+    """Aucun test n'interroge le pilote CUDA : le poste peut avoir un benchmark en cours."""
+    from slm_weight_editing import harness
+
+    monkeypatch.setattr(harness, "_cuda_available", lambda: False)
+
+    def no_gpu() -> int:
+        raise AssertionError("mémoire GPU interrogée dans un test")
+
+    monkeypatch.setattr(harness, "_cuda_free_bytes", no_gpu)
+
+
 @pytest.fixture
 def synth(tmp_path: Path) -> Synth:
     return build(tmp_path)

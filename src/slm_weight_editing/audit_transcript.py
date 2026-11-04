@@ -378,7 +378,10 @@ _PYTHON = re.compile(r"(?:^|\buv\s+run\s+(?:--\S+\s+(?:\S+\s+)?)*)(?:python[0-9.
 _SEPARATORS = re.compile(r"&&|\|\||;|\||\n|(?<![0-9>])&(?!&)")
 _CD = re.compile(r"^(?:cd|chdir|pushd|set-location|sl|push-location)(?:\s+(.*))?$", re.IGNORECASE)
 _WHITELISTED = re.compile(
-    r"^uv run --project (\S+) slm-weight-editing (" + "|".join(ALLOWED_SUBCOMMANDS) + r")(?:\s|$)"
+    # `--extra cuda` (poste de séance avec GPU) est la seule option uv admise en plus de --project.
+    r"^uv run --project (\S+)( --extra cuda)? slm-weight-editing ("
+    + "|".join(ALLOWED_SUBCOMMANDS)
+    + r")(?:\s|$)"
 )
 
 
@@ -389,6 +392,8 @@ class Context:
     workspace: str | None
     repo: str
     session_id: str | None = None
+    # `cuda` de workspace.json : `--extra cuda` exigé si vrai, interdit si faux, libre sans espace.
+    cuda: bool | None = None
 
     @classmethod
     def build(
@@ -402,7 +407,17 @@ class Context:
 
             repo = repo_root()
         ws = None if workspace is None else _norm_path(Path(workspace).resolve().as_posix())
-        return cls(ws, _norm_path(Path(repo).resolve().as_posix()), session_id)
+        cuda = None if workspace is None else _workspace_cuda(Path(workspace))
+        return cls(ws, _norm_path(Path(repo).resolve().as_posix()), session_id, cuda)
+
+
+def _workspace_cuda(workspace: Path) -> bool:
+    """Champ `cuda` de workspace.json (absent ou illisible : faux, espace d'avant `--cuda`)."""
+    try:
+        info = json.loads((workspace / "workspace.json").read_text(encoding="utf-8"))
+    except OSError, ValueError:
+        return False
+    return isinstance(info, dict) and info.get("cuda") is True
 
 
 def _norm_path(path: str) -> str:
@@ -499,6 +514,11 @@ def check_shell(command: str, ctx: Context) -> list[tuple[str, str]]:
         m = _WHITELISTED.match(part)
         if m is None or _norm_path(m.group(1)) != ctx.repo:
             found.append(("commande-hors-liste", f"« {part[:80]} »"))
+        elif ctx.cuda is not None and bool(m.group(2)) != ctx.cuda:
+            # Sans l'extra, `uv run` resynchronise et retire torch CUDA ; avec, hors poste GPU,
+            # il installerait la roue CUDA.
+            want = "exigé" if ctx.cuda else "interdit"
+            found.append(("commande-hors-liste", f"--extra cuda {want} : « {part[:80]} »"))
         else:
             found += _check_options(part, ctx)
     return found

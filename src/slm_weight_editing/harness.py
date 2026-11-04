@@ -11,6 +11,9 @@ Un lot est consommé dès sa réservation, même si la génération plante (déc
 
 Chaque lot recharge les poids depuis `work/`, génère en glouton (max_new_tokens fixé à 4096)
 sous `torch.inference_mode()`, paramètres figés : ni gradient, ni perte, ni optimiseur.
+Appareil (`--device auto|cpu|cuda`) : fixé par le premier lot (ligne `reserve`), un autre est
+refusé ensuite ; chaque lot journalise appareil, GPU, versions de torch et de CUDA, et la
+mémoire GPU est libérée après le lot. Le dtype est celui du checkpoint (bf16 si le modèle l'est).
 Données : fichiers JSONL locaux des splits train de GSM8K et MATH, jamais sous `heldout/`.
 """
 
@@ -32,6 +35,7 @@ from pathlib import Path
 ALLOWED_BUDGETS = (10, 25, 50)
 MAX_PROBLEMS = 512
 MAX_NEW_TOKENS = 4096
+DEVICES = ("auto", "cpu", "cuda")
 DATASETS = ("gsm8k", "math")
 TRAIN_SPLIT = "train"
 FORBIDDEN_DIR = "heldout"
@@ -415,12 +419,135 @@ def _generation_settings(prompt_format: str, dtype: str) -> dict:
     }
 
 
-def _generate(work: Path, problems: list[dict]) -> tuple[dict, list[dict]]:
+def _cuda_available() -> bool:
+    """Seul point qui interroge le pilote CUDA (remplacé dans les tests)."""
+    import torch
+
+    return bool(torch.cuda.is_available())
+
+
+def resolve_device(requested: str) -> str:
+    """`auto` : cuda si disponible, sinon cpu ; `cuda` sans GPU est refusé (pas de repli muet)."""
+    if requested not in DEVICES:
+        raise HarnessError(f"appareil {requested!r} refusé : auto, cpu ou cuda")
+    if requested == "cpu":
+        return "cpu"
+    if _cuda_available():
+        return "cuda"
+    if requested == "cuda":
+        raise HarnessError("--device cuda refusé : aucun GPU CUDA disponible")
+    return "cpu"
+
+
+def device_info(device: str) -> dict:
+    """Appareil, GPU et versions de torch et de CUDA, journalisés dans chaque lot."""
+    import torch
+
+    gpu = torch.cuda.get_device_name(0) if device == "cuda" else None
+    return {
+        "device": device,
+        "gpu_name": gpu,
+        "torch_version": torch.__version__,
+        "cuda_version": torch.version.cuda,
+    }
+
+
+def _check_device_unchanged(journal: list[dict], device: str) -> None:
+    """L'appareil d'une séance est fixé par son premier lot : le décodage glouton peut différer
+    entre CPU et GPU, un changement fausserait la comparaison des lots."""
+    # Un `reserve` sans appareil date d'avant `--device` : ces lots ont tourné sur CPU.
+    previous = {e.get("device", "cpu") for e in journal if e.get("event") == "reserve"}
+    if previous and previous != {device}:
+        raise HarnessError(
+            f"changement d'appareil refusé : la séance tourne sur {sorted(previous)[0]}, "
+            f"pas sur {device}"
+        )
+
+
+# Marge GPU en plus des poids : cache KV (4096 jetons), activations, contexte CUDA.
+CUDA_MARGIN_BYTES = 1 << 30
+CUDA_MARGIN_RATIO = 0.1
+_DTYPE_BYTES = {"float32": 4, "float16": 2, "bfloat16": 2, "F32": 4, "F16": 2, "BF16": 2}
+
+
+def _cuda_free_bytes() -> int:
+    """Mémoire libre du GPU 0 (remplacé dans les tests)."""
+    import torch
+
+    return int(torch.cuda.mem_get_info(0)[0])
+
+
+def _checkpoint_dtype(work: Path) -> str | None:
+    """dtype déclaré par config.json (celui que charge `dtype="auto"`), None s'il manque."""
+    try:
+        config = json.loads((work / "config.json").read_text(encoding="utf-8"))
+    except OSError, ValueError:
+        return None
+    value = config.get("dtype") or config.get("torch_dtype")
+    return str(value).removeprefix("torch.") if value else None
+
+
+def weights_bytes(work: Path) -> tuple[int, str | None]:
+    """Octets des poids une fois chargés au dtype du checkpoint, et ce dtype."""
+    from math import prod
+
+    from slm_weight_editing.safetensors_file import open_checkpoint
+
+    dtype = _checkpoint_dtype(work)
+    loaded = _DTYPE_BYTES.get(dtype or "")
+    total = 0
+    for t in open_checkpoint(work).values():
+        stored = t.end - t.start
+        floating = t.dtype in _DTYPE_BYTES
+        total += prod(t.shape) * loaded if loaded and floating else stored
+    return total, dtype
+
+
+def check_cuda_memory(work: Path) -> None:
+    """Refuse le lot avant sa réservation si les poids ne tiennent pas dans le GPU.
+
+    Pas de conversion implicite (fp32 vers bf16) : elle changerait le décodage glouton.
+    """
+    need, dtype = weights_bytes(work)
+    required = int(need * (1 + CUDA_MARGIN_RATIO)) + CUDA_MARGIN_BYTES
+    free = _cuda_free_bytes()
+    if required <= free:
+        return
+    gib = 1 << 30
+    detail = (
+        f"poids {need / gib:.1f} Gio ({dtype or 'dtype inconnu'}) + marge, "
+        f"{required / gib:.1f} Gio requis, {free / gib:.1f} Gio libres sur le GPU"
+    )
+    hint = (
+        " ; checkpoint float32 : pas de conversion en bf16, elle changerait le décodage"
+        if dtype == "float32"
+        else ""
+    )
+    raise HarnessError(f"--device cuda refusé : mémoire GPU insuffisante ({detail}){hint}")
+
+
+def _generate(work: Path, problems: list[dict], device: str = "cpu") -> tuple[dict, list[dict]]:
+    import gc
+
+    import torch
+
+    try:
+        return _generate_on(work, problems, device)
+    finally:
+        # Les poids sont rechargés à chaque lot : rien ne doit rester sur le GPU entre deux lots.
+        gc.collect()
+        if device == "cuda":
+            torch.cuda.empty_cache()
+
+
+def _generate_on(work: Path, problems: list[dict], device: str) -> tuple[dict, list[dict]]:
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 
     tokenizer = AutoTokenizer.from_pretrained(work, local_files_only=True)
+    # dtype="auto" : celui du checkpoint (bf16 sur CUDA comme sur CPU si le modèle est bf16).
     model = AutoModelForCausalLM.from_pretrained(work, local_files_only=True, dtype="auto")
+    model.to(device)
     model.eval()
     model.requires_grad_(False)
     eos = model.config.eos_token_id
@@ -450,7 +577,7 @@ def _generate(work: Path, problems: list[dict]) -> tuple[dict, list[dict]]:
                 )
             else:
                 text = problem["prompt"]
-            enc = tokenizer(text, return_tensors="pt", add_special_tokens=not use_chat)
+            enc = tokenizer(text, return_tensors="pt", add_special_tokens=not use_chat).to(device)
             out = model.generate(**enc)
             new = out[0, enc["input_ids"].shape[1] :].tolist()
             reason = "stop" if new and new[-1] in eos_ids else "length"
@@ -475,8 +602,13 @@ def run_batch(
     start: int = 0,
     count: int | None = None,
     sessions_root: str | Path = DEFAULT_SESSIONS_ROOT,
+    device: str = "cpu",
 ) -> dict:
-    """Lance un lot : contrôles, rechargement de `work/`, génération, journal, décompte."""
+    """Lance un lot : contrôles, rechargement de `work/`, génération, journal, décompte.
+
+    `device` : cpu (défaut de l'API), cuda ou auto ; la CLI passe auto par défaut. L'appareil
+    est fixé par le premier lot de la séance (un autre est refusé avant toute réservation).
+    """
     resolved = check_data_request(dataset, split, data_path)
     directory = session_dir(session_id, sessions_root)
     read_state(directory)
@@ -488,7 +620,11 @@ def run_batch(
         if used >= state.budget:
             raise HarnessError(f"budget épuisé : {used}/{state.budget} lots")
         problems = load_problems(resolved, start, count)
+        actual_device = resolve_device(device)
+        _check_device_unchanged(read_journal(directory), actual_device)
         work = directory / WORK_DIR
+        if actual_device == "cuda":
+            check_cuda_memory(work)
         hashes = tensor_hashes(work)
         files = work_file_hashes(work)
         data_sha256 = _sha256_file(resolved)
@@ -499,15 +635,22 @@ def run_batch(
         started = _now()
         _append_journal(
             directory,
-            {"event": "reserve", "batch": number, "budget": state.budget, "at": started},
+            {
+                "event": "reserve",
+                "batch": number,
+                "budget": state.budget,
+                "device": actual_device,
+                "at": started,
+            },
         )
-        settings, outputs = _generate(work, problems)
+        settings, outputs = _generate(work, problems, actual_device)
         entry = {
             "event": "batch",
             "batch": number,
             "budget": state.budget,
             "remaining": state.budget - number,
             "settings": settings,
+            "device": device_info(actual_device),
             "dataset": dataset,
             "split": split,
             "data_path": str(resolved),
@@ -547,6 +690,12 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     rb.add_argument("--dataset", required=True, help="gsm8k ou math")
     rb.add_argument("--split", required=True, help="train seulement")
     rb.add_argument("--data", required=True, help="fichier JSONL local du split train")
+    rb.add_argument(
+        "--device",
+        choices=DEVICES,
+        default="auto",
+        help="auto (défaut : cuda si disponible, sinon cpu), cpu ou cuda ; fixé par le premier lot",
+    )
     rb.add_argument("--start", type=int, default=0, help="premier problème (défaut 0)")
     rb.add_argument("--count", type=int, help="nombre de problèmes (défaut : jusqu'à la fin)")
     root_help += " ; depuis un espace de séance, celui de workspace.json seulement"
@@ -580,10 +729,11 @@ def run(args: argparse.Namespace) -> int:
                 start=args.start,
                 count=args.count,
                 sessions_root=root,
+                device=args.device,
             )
             print(
                 f"Lot {entry['batch']}/{entry['budget']} : {len(entry['problems'])} problèmes, "
-                f"reste {entry['remaining']} lots"
+                f"reste {entry['remaining']} lots (appareil {entry['device']['device']})"
             )
         else:
             root = bind_workspace(args.session, args.sessions_root)
