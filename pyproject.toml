@@ -1,0 +1,43 @@
+[project]
+name = "slm-weight-editing"
+# Pas encore de release : première version (v0.1.0) quand la chaîne édition -> GGUF -> banc tourne.
+version = "0.0.0"
+description = "Édition directe des poids de petits modèles de langage par un LLM (Claude Opus dans Claude Code), sans entraînement, mesurée par slm-quality-bench"
+readme = "README.md"
+authors = [{ name = "Anaël Yahi" }]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+# Même version que slm-quality-bench ; à revoir si torch n'a pas de roue 3.14 sous Windows.
+requires-python = ">=3.14"
+keywords = ["slm", "weight-editing", "interpretability", "gguf", "ollama"]
+# Dépendances d'exécution (torch, safetensors, gguf…) ajoutées par `uv add` à la première story,
+# jamais figées de mémoire.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/Aliquanto3/slm-weight-editing"
+"Banc de mesure" = "https://github.com/Aliquanto3/slm-quality-bench"
+
+[project.scripts]
+slm-weight-editing = "slm_weight_editing:main"
+
+[build-system]
+requires = ["uv_build>=0.12.23,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "ruff>=0.17.3",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --tb=short --strict-markers"

@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Poids, GGUF et jeux de données : jamais dans le dépôt (voir AGENTS.md)
+data/
+models/
+*.gguf
+*.safetensors
+*.bin
+*.pt
+
+# Jeux d'évaluation tenus à l'écart de l'agent éditeur
+heldout/
+
+.env
