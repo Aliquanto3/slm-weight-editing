@@ -894,9 +894,11 @@ def test_settings_uv_project_must_designate_expected_repo(tmp_path, settings, ok
 
 
 def test_settings_uv_project_checked_against_repo_option(tmp_path):
-    ws = _workspace_with_settings(tmp_path, {"env": {"UV_PROJECT": "C:/autre"}})
+    # Chemin absolu sur les trois OS : `C:/autre` serait relatif sous Linux et macOS.
+    other = (tmp_path / "autre").resolve().as_posix()
+    ws = _workspace_with_settings(tmp_path, {"env": {"UV_PROJECT": other}})
     t = _transcript(ws / "t.jsonl")
-    assert audit.audit_transcript(t, ws, repo="C:/autre", session_id="s1") == []
+    assert audit.audit_transcript(t, ws, repo=other, session_id="s1") == []
 
 
 @pytest.mark.parametrize("tail", ["--project C:/autre", "--directory C:/autre", "--project=C:/x"])
