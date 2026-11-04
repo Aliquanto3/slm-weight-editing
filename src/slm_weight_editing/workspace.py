@@ -44,8 +44,9 @@ DENIED_CMDLETS = (
 # Sous-chaînes refusées n'importe où dans une commande (une règle deny matche après une
 # affectation de variable en tête, contrairement à une règle allow).
 DENIED_ANYWHERE = (
-    "PYTHONPATH PYTHONHOME PYTHONSTARTUP UV_ heldout slm-quality-bench session-open "
-    "session-freeze session-workspace apply-diff audit-session state.json journal.jsonl "
+    "PYTHONPATH PYTHONHOME PYTHONSTARTUP UV_ --project --directory heldout slm-quality-bench "
+    "session-open session-freeze session-workspace apply-diff audit-session state.json "
+    "journal.jsonl "
     "registry.jsonl session.lock workspace.json SymbolicLink Junction HardLink"
 ).split()
 DENIED_UV = (
@@ -87,13 +88,13 @@ CUDA_EXTRA = " --extra cuda"
 def allowed_commands(repo: Path, cuda: bool = False) -> list[str]:
     """Préfixes exacts des trois commandes de l'éditeur (forme vérifiée par l'audit).
 
-    Avec `cuda`, `--extra cuda` suit `--project` : `uv run` resynchroniserait sinon
-    l'environnement sans l'extra et retirerait torch CUDA.
+    Le dépôt n'y figure pas : `env.UV_PROJECT` des réglages le fixe (un chemin hors de l'espace
+    cité par `--project` est refusé en `dontAsk` avec `blockReadsOutsideWorkingDirectories`).
+    Avec `cuda`, `--extra cuda` suit `run` : `uv run` resynchroniserait sinon l'environnement
+    sans l'extra et retirerait torch CUDA.
     """
     extra = CUDA_EXTRA if cuda else ""
-    return [
-        f"uv run --project {posix(repo)}{extra} slm-weight-editing {s}" for s in ALLOWED_SUBCOMMANDS
-    ]
+    return [f"uv run{extra} slm-weight-editing {s}" for s in ALLOWED_SUBCOMMANDS]
 
 
 def memory_excludes(workspace: Path, repo: Path) -> list[str]:
@@ -155,6 +156,7 @@ def build_settings(workspace: Path, repo: Path, session_id: str, cuda: bool = Fa
     return {
         "$schema": "https://json.schemastore.org/claude-code-settings.json",
         "enableAllProjectMcpServers": False,
+        "env": {"UV_PROJECT": posix(repo)},
         "claudeMdExcludes": memory_excludes(workspace, repo),
         "permissions": {
             "defaultMode": "dontAsk",
@@ -176,7 +178,6 @@ def render(
     for key, value in (
         ("<ID_SEANCE>", session_id),
         ("<BUDGET>", str(budget)),
-        ("<DEPOT>", posix(repo)),
         ("<EXTRA>", CUDA_EXTRA if cuda else ""),
         ("<DONNEES>", listing),
     ):
