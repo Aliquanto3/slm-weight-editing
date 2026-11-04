@@ -10,9 +10,11 @@ license-files = ["LICENSE"]
 # Même version que slm-quality-bench ; à revoir si torch n'a pas de roue 3.14 sous Windows.
 requires-python = ">=3.14"
 keywords = ["slm", "weight-editing", "interpretability", "gguf", "ollama"]
-# Dépendances d'exécution (torch, safetensors, gguf…) ajoutées par `uv add` à la première story,
+# Dépendances ajoutées par `uv add` (numpy à la story 1 ; gguf-py en dev pour les tests),
 # jamais figées de mémoire.
-dependencies = []
+dependencies = [
+    "numpy>=2.5.4",
+]
 
 [project.urls]
 Homepage = "https://github.com/Aliquanto3/slm-weight-editing"
@@ -27,6 +29,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "gguf>=0.19.0",
     "pytest>=9.2.0",
     "ruff>=0.17.3",
 ]
