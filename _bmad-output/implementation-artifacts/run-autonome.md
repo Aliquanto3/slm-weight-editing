@@ -87,3 +87,4 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 - 2026-11-04 09:15 · 1.4 · fusion · #8 fusionnée, MERGED vérifié · 0fc353b
 - 2026-11-04 09:19 · 1.5 · dev · fini, 240 tests verts (73 cas de violation), merge de main 0fc353b · d075517
 - 2026-11-04 09:19 · 1.5 · second-avis · lancé, avec vérification de la syntaxe des permissions dans la doc officielle · —
+- 2026-11-04 09:20 · 1.5 · second-avis · syntaxe des permissions vérifiée (doc officielle) : // et Read/Grep/Glob, PowerShell(...), claudeMdExcludes confirmés ; Task sans effet ; disableAutoMode à ajouter · —
