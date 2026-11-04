@@ -72,3 +72,5 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 - 2026-11-04 08:54 · 1.3 · fusion · #7 fusionnée, MERGED vérifié · 64d6b78
 - 2026-11-04 08:55 · 1.4 · décision · report-gguf reçoit une option qui lit les sha256 attendus dans le diff (CLI limitée aux sha256 du MIT) · —
 - 2026-11-04 08:55 · 1.4 · dev · lancé (dev-story Sonnet, worktree wt-s4, feat/gel-diff-edition) · —
+- 2026-11-04 09:03 · 1.4 · dev · fini, 26 tests, suite verte · 3328dcd
+- 2026-11-04 09:03 · 1.4 · second-avis · lancé · —
