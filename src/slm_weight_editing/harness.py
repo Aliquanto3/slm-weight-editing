@@ -4,7 +4,10 @@ Une séance vit dans `models/sessions/<id>/` :
 - `state.json` : budget de lots (10, 25 ou 50, fixé à l'ouverture, immuable), lots consommés,
   gel (posé par la story 4), checkpoint et révision de base, dates ;
 - `work/` : copie du checkpoint de base (safetensors, config, tokenizer) que l'agent modifie ;
-- `journal.jsonl` : une ligne `open` à l'ouverture, puis une ligne `batch` par lot accepté.
+- `journal.jsonl` : une ligne `open` à l'ouverture (avec le sha256 de la base), puis par lot une
+  ligne `reserve` (lot décompté avant la génération) et une ligne `batch` (sorties).
+Le registre `<sessions_root>/registry.jsonl` (ajout seul) garde chaque identifiant ouvert.
+Un lot est consommé dès sa réservation, même si la génération plante (décompte conservateur).
 
 Chaque lot recharge les poids depuis `work/`, génère en glouton (max_new_tokens fixé à 4096)
 sous `torch.inference_mode()`, paramètres figés : ni gradient, ni perte, ni optimiseur.
@@ -21,6 +24,8 @@ import os
 import re
 import shutil
 import sys
+import time
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -35,6 +40,9 @@ STATE_FILE = "state.json"
 JOURNAL_FILE = "journal.jsonl"
 WORK_DIR = "work"
 LOCK_FILE = "session.lock"
+REGISTRY_FILE = "registry.jsonl"
+_REPLACE_RETRIES = 20
+_REPLACE_DELAY = 0.1
 _SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 # Champs de problème reconnus : `question` (GSM8K) ou `problem` (MATH).
 _PROMPT_KEYS = ("question", "problem")
@@ -106,23 +114,49 @@ def _write_state(directory: Path, state: SessionState) -> None:
     tmp = path.with_suffix(".tmp")
     text = json.dumps(dataclasses.asdict(state), indent=2, ensure_ascii=False)
     tmp.write_text(text, "utf-8", newline="\n")
-    os.replace(tmp, path)
+    # Sous Windows, os.replace échoue (WinError 5) tant qu'un autre processus tient state.json.
+    for attempt in range(_REPLACE_RETRIES):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError as exc:
+            if attempt == _REPLACE_RETRIES - 1:
+                tmp.unlink(missing_ok=True)
+                raise HarnessError(f"écriture de {path} impossible ({exc})", 1) from exc
+            time.sleep(_REPLACE_DELAY)
+
+
+@contextmanager
+def _session_lock(directory: Path):
+    """Verrou exclusif de séance : un lot ou un gel à la fois."""
+    lock = directory / LOCK_FILE
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError as exc:
+        raise HarnessError(f"un lot tourne déjà (sinon supprimer {lock})") from exc
+    os.close(fd)
+    try:
+        yield
+    finally:
+        lock.unlink(missing_ok=True)
 
 
 def update_state(directory: str | Path, **changes: object) -> SessionState:
     """Seul changement admis hors lot : poser `frozen` à vrai (gel, story 4)."""
     directory = Path(directory)
-    state = read_state(directory)
     if set(changes) - {"frozen"}:
         raise HarnessError(f"champs non modifiables : {sorted(set(changes) - {'frozen'})}")
-    if "frozen" in changes:
-        if changes["frozen"] is not True and state.frozen:
+    if "frozen" in changes and type(changes["frozen"]) is not bool:
+        raise HarnessError("frozen doit être un booléen")
+    read_state(directory)
+    # Sous le verrou : un lot en cours ne peut ni annuler le gel ni démarrer après lui.
+    with _session_lock(directory):
+        state = read_state(directory)
+        if changes.get("frozen") is False and state.frozen:
             raise HarnessError("une séance gelée ne se dégèle pas")
-        if type(changes["frozen"]) is not bool:
-            raise HarnessError("frozen doit être un booléen")
-    new = dataclasses.replace(state, **changes, updated_at=_now())
-    _write_state(directory, new)
-    return new
+        new = dataclasses.replace(state, **changes, updated_at=_now())
+        _write_state(directory, new)
+        return new
 
 
 def _append_journal(directory: Path, entry: dict) -> None:
@@ -137,6 +171,47 @@ def read_journal(directory: str | Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text("utf-8").splitlines() if line.strip()]
 
 
+def used_batches(directory: str | Path, state: SessionState | None = None) -> int:
+    """Lots consommés : `state.used`, recoupé avec les réservations du journal.
+
+    Refuse la séance si `state.json` compte moins de lots que le journal (remise à zéro à la
+    main) ou si le budget diffère de celui de la ligne `open`.
+    """
+    directory = Path(directory)
+    state = read_state(directory) if state is None else state
+    journal = read_journal(directory)
+    opened = next((e for e in journal if e.get("event") == "open"), None)
+    if opened is None or opened.get("budget") != state.budget:
+        raise HarnessError("budget de state.json différent de celui de l'ouverture")
+    reserved = sum(1 for e in journal if e.get("event") == "reserve")
+    if state.used < reserved:
+        raise HarnessError(
+            f"compteur incohérent : state.json compte {state.used} lots, le journal {reserved}"
+        )
+    return max(state.used, reserved)
+
+
+def _registered_ids(sessions_root: Path) -> set[str]:
+    path = sessions_root / REGISTRY_FILE
+    if not path.exists():
+        return set()
+    return {
+        json.loads(line).get("session_id")
+        for line in path.read_text("utf-8").splitlines()
+        if line.strip()
+    }
+
+
+def _is_under_session(base: Path, sessions_root: Path) -> bool:
+    """Vrai si `base` est sous le dossier des séances ou dans un dossier de séance quelconque."""
+    roots = {sessions_root.resolve(), Path(DEFAULT_SESSIONS_ROOT).resolve()}
+    if any(base == r or r in base.parents for r in roots):
+        return True
+    return any(
+        (d / STATE_FILE).exists() or (d / JOURNAL_FILE).exists() for d in (base, *base.parents)
+    )
+
+
 def open_session(
     session_id: str,
     budget: int,
@@ -148,11 +223,16 @@ def open_session(
     """Ouvre une séance : budget écrit une fois pour toutes, checkpoint copié dans `work/`."""
     _check_budget(budget)
     directory = session_dir(session_id, sessions_root)
-    if directory.exists():
+    root = Path(sessions_root)
+    if directory.exists() or session_id in _registered_ids(root):
         raise HarnessError(f"séance déjà ouverte : {directory} (budget non modifiable)")
     base = Path(base_checkpoint)
     if not base.is_dir() or not any(base.glob("*.safetensors")):
         raise HarnessError(f"checkpoint de base sans safetensors : {base}", 1)
+    if _is_under_session(base.resolve(), root):
+        raise HarnessError(f"checkpoint de base refusé : {base} est issu d'une séance")
+    base_tensors = tensor_hashes(base)
+    base_files = work_file_hashes(base)
     work = directory / WORK_DIR
     work.mkdir(parents=True)
     for file in sorted(base.iterdir()):
@@ -169,9 +249,13 @@ def open_session(
             "budget": budget,
             "base_checkpoint": state.base_checkpoint,
             "base_revision": base_revision,
+            "base_tensors_sha256": base_tensors,
+            "base_files_sha256": base_files,
             "at": now,
         },
     )
+    with (root / REGISTRY_FILE).open("a", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps({"session_id": session_id, "opened_at": now}) + "\n")
     return state
 
 
@@ -214,8 +298,8 @@ def load_problems(path: Path, start: int = 0, count: int | None = None) -> list[
             raise HarnessError(f"{path}:{index + 1} : JSON invalide", 1) from exc
         if not isinstance(record, dict):
             raise HarnessError(f"{path}:{index + 1} : objet JSON attendu", 1)
-        if record.get("split", TRAIN_SPLIT) != TRAIN_SPLIT:
-            raise HarnessError(f"{path}:{index + 1} : split {record['split']!r} refusé")
+        if record.get("split") != TRAIN_SPLIT:
+            raise HarnessError(f"{path}:{index + 1} : split {record.get('split')!r} refusé")
         prompt = next((record[k] for k in _PROMPT_KEYS if isinstance(record.get(k), str)), None)
         if prompt is None:
             raise HarnessError(f"{path}:{index + 1} : champ question ou problem absent", 1)
@@ -237,6 +321,16 @@ def tensor_hashes(work: Path) -> dict[str, str]:
 
     index = open_checkpoint(work)
     return {name: hashlib.sha256(index[name].read_bytes()).hexdigest() for name in sorted(index)}
+
+
+def work_file_hashes(work: Path) -> dict[str, str]:
+    """sha256 des autres fichiers du checkpoint (config, generation_config, tokenizer...)."""
+    work = Path(work)
+    return {
+        f.relative_to(work).as_posix(): _sha256_file(f)
+        for f in sorted(work.rglob("*"))
+        if f.is_file() and f.suffix != ".safetensors"
+    }
 
 
 def _generation_settings(prompt_format: str, dtype: str) -> dict:
@@ -318,29 +412,29 @@ def run_batch(
     """Lance un lot : contrôles, rechargement de `work/`, génération, journal, décompte."""
     resolved = check_data_request(dataset, split, data_path)
     directory = session_dir(session_id, sessions_root)
-    state = read_state(directory)
-    lock = directory / LOCK_FILE
-    try:
-        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError as exc:
-        raise HarnessError(f"un lot tourne déjà (sinon supprimer {lock})") from exc
-    os.close(fd)
-    try:
+    read_state(directory)
+    with _session_lock(directory):
         state = read_state(directory)
         if state.frozen:
             raise HarnessError("séance gelée : plus aucun lot")
-        journal = read_journal(directory)
-        opened = next((e for e in journal if e.get("event") == "open"), None)
-        if opened is None or opened.get("budget") != state.budget:
-            raise HarnessError("budget de state.json différent de celui de l'ouverture")
-        if state.remaining <= 0:
-            raise HarnessError(f"budget épuisé : {state.used}/{state.budget} lots")
+        used = used_batches(directory, state)
+        if used >= state.budget:
+            raise HarnessError(f"budget épuisé : {used}/{state.budget} lots")
         problems = load_problems(resolved, start, count)
         work = directory / WORK_DIR
-        started = _now()
         hashes = tensor_hashes(work)
+        files = work_file_hashes(work)
+        data_sha256 = _sha256_file(resolved)
+        number = used + 1
+        # Réservation avant la génération : un échec d'écriture ne génère rien, un plantage
+        # pendant la génération consomme le lot.
+        _write_state(directory, dataclasses.replace(state, used=number, updated_at=_now()))
+        started = _now()
+        _append_journal(
+            directory,
+            {"event": "reserve", "batch": number, "budget": state.budget, "at": started},
+        )
         settings, outputs = _generate(work, problems)
-        number = state.used + 1
         entry = {
             "event": "batch",
             "batch": number,
@@ -350,18 +444,16 @@ def run_batch(
             "dataset": dataset,
             "split": split,
             "data_path": str(resolved),
-            "data_sha256": _sha256_file(resolved),
+            "data_sha256": data_sha256,
             "problems": problems,
             "outputs": outputs,
             "tensors_sha256": hashes,
+            "files_sha256": files,
             "started_at": started,
             "finished_at": _now(),
         }
         _append_journal(directory, entry)
-        _write_state(directory, dataclasses.replace(state, used=number, updated_at=_now()))
         return entry
-    finally:
-        lock.unlink(missing_ok=True)
 
 
 def add_parser(sub: argparse._SubParsersAction) -> None:
@@ -424,10 +516,12 @@ def run(args: argparse.Namespace) -> int:
                 f"reste {entry['remaining']} lots"
             )
         else:
-            state = read_state(session_dir(args.session, args.sessions_root))
+            directory = session_dir(args.session, args.sessions_root)
+            state = read_state(directory)
+            used = used_batches(directory, state)
             print(
-                f"Séance {state.session_id} : {state.used}/{state.budget} lots, "
-                f"reste {state.remaining}, gelée : {'oui' if state.frozen else 'non'}"
+                f"Séance {state.session_id} : {used}/{state.budget} lots, "
+                f"reste {state.budget - used}, gelée : {'oui' if state.frozen else 'non'}"
             )
     except HarnessError as exc:
         print(f"Erreur : {exc}", file=sys.stderr)

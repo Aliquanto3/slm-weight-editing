@@ -18,6 +18,7 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 import torch  # noqa: E402
+from safetensors.torch import load_file  # noqa: E402
 from tokenizers import Tokenizer, models, pre_tokenizers  # noqa: E402
 from transformers import LlamaConfig, LlamaForCausalLM, PreTrainedTokenizerFast  # noqa: E402
 
@@ -67,7 +68,10 @@ def stop_ckpt(tmp_path_factory) -> Path:
 def train_file(tmp_path: Path) -> Path:
     path = tmp_path / "data" / "gsm8k" / "train.jsonl"
     path.parent.mkdir(parents=True)
-    rows = [{"id": f"g{i}", "question": "combien font deux et trois ?"} for i in range(3)]
+    rows = [
+        {"id": f"g{i}", "question": "combien font deux et trois ?", "split": "train"}
+        for i in range(3)
+    ]
     path.write_text("".join(json.dumps(r) + "\n" for r in rows), "utf-8")
     return path
 
@@ -95,6 +99,14 @@ def test_open_writes_state_and_journal(root, stop_ckpt, budget):
     assert state.remaining == budget
     assert harness.read_state(d) == state
     assert sorted(p.name for p in (d / "work").glob("*.safetensors")) == ["model.safetensors"]
+    open_line = harness.read_journal(d)[0]
+    norm = load_file(stop_ckpt / "model.safetensors")["model.norm.weight"]
+    expected_norm = hashlib.sha256(norm.numpy().tobytes()).hexdigest()
+    assert open_line["base_tensors_sha256"]["model.norm.weight"] == expected_norm
+    config_sha = hashlib.sha256((stop_ckpt / "config.json").read_bytes()).hexdigest()
+    assert open_line["base_files_sha256"]["config.json"] == config_sha
+    assert "tokenizer.json" in open_line["base_files_sha256"]
+    assert not any(k.endswith(".safetensors") for k in open_line["base_files_sha256"])
     assert harness.read_journal(d) == [
         {
             "event": "open",
@@ -102,6 +114,8 @@ def test_open_writes_state_and_journal(root, stop_ckpt, budget):
             "budget": budget,
             "base_checkpoint": str(stop_ckpt.resolve()),
             "base_revision": "rev0",
+            "base_tensors_sha256": open_line["base_tensors_sha256"],
+            "base_files_sha256": open_line["base_files_sha256"],
             "at": state.created_at,
         }
     ]
@@ -277,7 +291,9 @@ def test_update_state_freezes_and_never_unfreezes(root, stop_ckpt):
 def test_batch_over_512_problems_refused(root, stop_ckpt, tmp_path):
     open_s(root, stop_ckpt)
     big = tmp_path / "math_train.jsonl"
-    big.write_text("".join(json.dumps({"problem": "x"}) + "\n" for _ in range(513)), "utf-8")
+    big.write_text(
+        "".join(json.dumps({"problem": "x", "split": "train"}) + "\n" for _ in range(513)), "utf-8"
+    )
     with pytest.raises(HarnessError, match="lot de 513 problèmes refusé : 512 au plus"):
         harness.run_batch("s1", "math", "train", big, sessions_root=root)
     with pytest.raises(HarnessError, match="lot de 513"):
@@ -338,8 +354,14 @@ def test_refuses_non_train_file_name_and_record(tmp_path):
     with pytest.raises(HarnessError, match="ne porte pas « train »"):
         harness.check_data_request("gsm8k", "train", test_file)
     mixed = tmp_path / "train.jsonl"
-    mixed.write_text('{"question": "a"}\n{"question": "b", "split": "test"}\n', "utf-8")
+    mixed.write_text(
+        '{"question": "a", "split": "train"}\n{"question": "b", "split": "test"}\n', "utf-8"
+    )
     with pytest.raises(HarnessError, match=r"train.jsonl:2 : split 'test' refusé"):
+        harness.load_problems(mixed)
+    # Un enregistrement sans champ split est refusé, pas supposé train.
+    mixed.write_text('{"question": "a", "split": "train"}\n{"question": "b"}\n', "utf-8")
+    with pytest.raises(HarnessError, match=r"train.jsonl:2 : split None refusé"):
         harness.load_problems(mixed)
 
 
@@ -446,3 +468,148 @@ def test_lock_refuses_concurrent_batch(root, stop_ckpt, train_file):
 def test_session_id_validated(root, stop_ckpt, sid):
     with pytest.raises(HarnessError, match="identifiant de séance invalide"):
         open_s(root, stop_ckpt, sid=sid)
+
+
+# --- Revue passe 1 : décompte, verrou, lignée, empreintes ---
+
+
+def test_base_checkpoint_from_a_session_refused(root, stop_ckpt, tmp_path):
+    open_s(root, stop_ckpt)
+    with pytest.raises(HarnessError, match="issu d'une séance"):
+        open_s(root, root / "s1" / "work", sid="s2")
+    # Copie d'une séance hors du dossier des séances : toujours reconnue (state.json au-dessus).
+    import shutil
+
+    elsewhere = tmp_path / "copie"
+    shutil.copytree(root / "s1", elsewhere)
+    with pytest.raises(HarnessError, match="issu d'une séance"):
+        open_s(root, elsewhere / "work", sid="s3")
+    assert not (root / "s2").exists() and not (root / "s3").exists()
+
+
+def test_deleted_session_id_cannot_be_reopened(root, stop_ckpt, train_file):
+    import shutil
+
+    open_s(root, stop_ckpt, 10)
+    harness.run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
+    shutil.rmtree(root / "s1")
+    with pytest.raises(HarnessError, match="déjà ouverte"):
+        open_s(root, stop_ckpt, 50)
+    registry = (root / "registry.jsonl").read_text("utf-8").splitlines()
+    assert [json.loads(line)["session_id"] for line in registry] == ["s1"]
+
+
+def test_used_reset_by_hand_refused(root, stop_ckpt, train_file, capsys):
+    open_s(root, stop_ckpt, 10)
+    d = root / "s1"
+    for _ in range(2):
+        harness.run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
+    raw = json.loads((d / "state.json").read_text("utf-8"))
+    raw["used"] = 0
+    (d / "state.json").write_text(json.dumps(raw), "utf-8")
+    with pytest.raises(HarnessError, match="compteur incohérent : state.json compte 0 lots"):
+        harness.run_batch("s1", "gsm8k", "train", train_file, sessions_root=root)
+    assert main(["session-status", "--session", "s1", "--sessions-root", str(root)]) == 2
+    assert "compteur incohérent" in capsys.readouterr().err
+
+
+def test_crash_during_generation_consumes_batch(root, stop_ckpt, train_file, monkeypatch):
+    open_s(root, stop_ckpt, 10)
+    d = root / "s1"
+    real = harness._generate
+
+    def crash(work, problems):
+        raise RuntimeError("plantage simulé")
+
+    monkeypatch.setattr(harness, "_generate", crash)
+    with pytest.raises(RuntimeError, match="plantage simulé"):
+        harness.run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
+    assert harness.read_state(d).used == 1
+    assert [e["event"] for e in harness.read_journal(d)] == ["open", "reserve"]
+    assert not (d / "session.lock").exists()
+    monkeypatch.setattr(harness, "_generate", real)
+    entry = harness.run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
+    assert (entry["batch"], entry["remaining"]) == (2, 8)
+    events = [(e["event"], e.get("batch")) for e in harness.read_journal(d)]
+    assert events == [("open", None), ("reserve", 1), ("reserve", 2), ("batch", 2)]
+
+
+def test_state_write_refused_generates_nothing(root, stop_ckpt, train_file, monkeypatch):
+    open_s(root, stop_ckpt, 10)
+    d = root / "s1"
+    monkeypatch.setattr(harness, "_REPLACE_DELAY", 0)
+    calls = []
+
+    def locked(src, dst):
+        calls.append(dst)
+        raise PermissionError(13, "Accès refusé", str(dst))
+
+    monkeypatch.setattr(harness.os, "replace", locked)
+    monkeypatch.setattr(harness, "_generate", lambda *a: pytest.fail("généré sans décompte"))
+    with pytest.raises(HarnessError, match="écriture de .*state.json impossible"):
+        harness.run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
+    assert len(calls) == harness._REPLACE_RETRIES
+    assert [e["event"] for e in harness.read_journal(d)] == ["open"]
+    assert harness.read_state(d).used == 0
+    assert not (d / "state.tmp").exists() and not (d / "session.lock").exists()
+
+
+def test_state_write_retried_while_file_held(root, stop_ckpt, train_file, monkeypatch):
+    open_s(root, stop_ckpt, 10)
+    monkeypatch.setattr(harness, "_REPLACE_DELAY", 0)
+    real_replace = os.replace
+    failures = [PermissionError(13, "Accès refusé")] * 3
+
+    def flaky(src, dst):
+        if failures:
+            raise failures.pop()
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(harness.os, "replace", flaky)
+    entry = harness.run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
+    assert entry["batch"] == 1 and harness.read_state(root / "s1").used == 1
+
+
+def test_freeze_during_batch_refused_never_undone(root, stop_ckpt, train_file, monkeypatch):
+    open_s(root, stop_ckpt, 10)
+    d = root / "s1"
+    real = harness._generate
+    seen = []
+
+    def freeze_then_generate(work, problems):
+        with pytest.raises(HarnessError, match="un lot tourne déjà") as exc:
+            harness.update_state(d, frozen=True)
+        seen.append(exc.value)
+        return real(work, problems)
+
+    monkeypatch.setattr(harness, "_generate", freeze_then_generate)
+    harness.run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
+    assert seen and harness.read_state(d).frozen is False
+    monkeypatch.setattr(harness, "_generate", real)
+    assert harness.update_state(d, frozen=True).frozen is True
+    assert not (d / "session.lock").exists()
+    with pytest.raises(HarnessError, match="gelée"):
+        harness.run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
+    assert [e["event"] for e in harness.read_journal(d)] == ["open", "reserve", "batch"]
+
+
+def test_checkpoint_generation_config_cannot_change_decoding(tmp_path, train_file):
+    """generation_config.json de work/ (échantillonnage, plafond 5) ignoré : glouton, 4096."""
+    ckpt = build_checkpoint(tmp_path / "length", eos_id=1)
+    root = tmp_path / "sessions"
+    harness.open_session("G", 10, ckpt, sessions_root=root)
+    work = root / "G" / "work"
+    before = harness.work_file_hashes(work)
+    (work / "generation_config.json").write_text(
+        json.dumps({"do_sample": True, "temperature": 5.0, "top_k": 0, "max_new_tokens": 5}),
+        "utf-8",
+    )
+    entry = harness.run_batch("G", "gsm8k", "train", train_file, count=1, sessions_root=root)
+    out = entry["outputs"][0]
+    assert (out["new_tokens"], out["done_reason"]) == (4096, "length")
+    assert set(out["text"].split()) == {"<eos>"}
+    files = entry["files_sha256"]
+    gen_sha = hashlib.sha256((work / "generation_config.json").read_bytes()).hexdigest()
+    assert files["generation_config.json"] == gen_sha
+    assert files["generation_config.json"] != before.get("generation_config.json")
+    assert files["config.json"] == before["config.json"]
