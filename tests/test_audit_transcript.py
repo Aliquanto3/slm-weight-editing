@@ -688,3 +688,74 @@ def test_consigne_states_protocol():
 
     assert f"{round(MAX_CHANGED_SHARE * 100)} %" in text
     assert re.search(r"## Plafond du diff\n\n[^\n]+10 %[^\n]+\n\n## ", text)
+
+
+# Revue passe 1 : noms protégés normalisés, options liées à l'espace, données des lots.
+
+
+CTX_S1 = audit.Context.build(WS, REPO, "s1")
+
+
+def rules_of(found) -> set[str]:
+    return {rule for rule, _ in found}
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "notes/x/s1/state.json.",
+        "notes/x/s1/STATE.JSON",
+        "notes/x/s1/state.json ",
+        "scripts/state.json::$DATA",
+        "notes/workspace.json",
+    ],
+)
+def test_protected_name_variants_are_flagged(path):
+    found = audit.check_tool_use("Write", {"file_path": path, "content": "{}"}, CTX_S1)
+    assert "etat-seance" in rules_of(found), found
+
+
+def test_ntfs_stream_in_write_path_is_flagged():
+    tool_input = {"file_path": "scripts/a.py:flux", "content": "1"}
+    found = audit.check_tool_use("Write", tool_input, CTX_S1)
+    assert ("ecriture-hors-liste", "flux de fichier dans scripts/a.py:flux") in found
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        "run-batch --session s1 --sessions-root notes/fake --dataset gsm8k --split train "
+        "--data data/gsm8k-train.jsonl",
+        "run-batch --session s1 --sessions-root sessions --dataset gsm8k --split train "
+        "--data C:/elsewhere/leak_train.jsonl",
+        "run-batch --session s1 --dataset gsm8k --split train --data=../x/gsm8k-train.jsonl",
+        "run-batch --session s2 --sessions-root sessions --dataset gsm8k --split train "
+        "--data data/gsm8k-train.jsonl",
+        "session-status --session s1 --sessions-root C:/autre/sessions",
+        "run-script scripts/x.py --session s1 --sessions-root=notes/fake",
+    ],
+)
+def test_options_outside_workspace_are_flagged(args):
+    found = audit.check_shell(f"{UV} {args}", CTX_S1)
+    assert rules_of(found) == {"hors-espace-seance"}, found
+
+
+def test_options_of_the_workspace_pass():
+    for name, tool_input in CLEAN_CALLS:
+        if name in ("Bash", "PowerShell"):
+            assert audit.check_shell(tool_input["command"], CTX_S1) == [], tool_input
+    absolute = f"{UV} session-status --session s1 --sessions-root {WS.as_posix()}/sessions"
+    assert audit.check_shell(absolute, CTX_S1) == []
+
+
+def test_batches_outside_workspace_data_are_flagged(tmp_path):
+    s = make_session(tmp_path, dict(REF))
+    events = [
+        {"event": "batch", "batch": 1, "data_path": str(WS / "data" / "gsm8k-train.jsonl")},
+        {"event": "batch", "batch": 2, "data_path": str(tmp_path / "leak_train.jsonl")},
+    ]
+    with (s / "journal.jsonl").open("a", encoding="utf-8") as f:
+        for e in events:
+            f.write(json.dumps(e) + "\n")
+    found = audit.audit_batches(s, WS)
+    assert [(v.line, v.rule) for v in found] == [(4, "hors-espace-seance")]

@@ -19,7 +19,7 @@ from pathlib import Path
 from slm_weight_editing import harness
 from slm_weight_editing.script_runner import DATA_DIR, SCRIPTS_DIR, _inside, _python_roots
 
-SESSIONS_DIR = "sessions"
+SESSIONS_DIR = harness.WORKSPACE_SESSIONS_DIR
 NOTES_DIR = "notes"
 TEMPLATES = Path(__file__).with_name("seance")
 ALLOWED_SUBCOMMANDS = ("run-batch", "session-status", "run-script")
@@ -46,7 +46,7 @@ DENIED_CMDLETS = (
 DENIED_ANYWHERE = (
     "PYTHONPATH PYTHONHOME PYTHONSTARTUP UV_ heldout slm-quality-bench session-open "
     "session-freeze session-workspace apply-diff audit-session state.json journal.jsonl "
-    "registry.jsonl session.lock SymbolicLink Junction HardLink"
+    "registry.jsonl session.lock workspace.json SymbolicLink Junction HardLink"
 ).split()
 DENIED_UV = (
     "uv run python*",
@@ -57,6 +57,13 @@ DENIED_UV = (
     "uv sync*",
     "uv tool *",
     "uv lock*",
+)
+PROTECTED_FILES = (
+    harness.STATE_FILE,
+    harness.JOURNAL_FILE,
+    harness.REGISTRY_FILE,
+    harness.LOCK_FILE,
+    harness.WORKSPACE_FILE,
 )
 _SAFE_PATH = re.compile(r"^[A-Za-z0-9_:/.\-]+$")
 
@@ -124,11 +131,15 @@ def build_settings(workspace: Path, repo: Path, session_id: str) -> dict:
         f"Edit({sessions}/*/{harness.LOCK_FILE})",
         f"Edit({sessions}/*/freeze/**)",
         f"Edit({sessions}/*/scripts/**)",
-        f"Edit(**/{harness.STATE_FILE})",
-        f"Edit(**/{harness.JOURNAL_FILE})",
-        f"Edit(**/{harness.REGISTRY_FILE})",
-        f"Edit(**/{harness.LOCK_FILE})",
+        f"Edit(./{harness.WORKSPACE_FILE})",
     ]
+    # Noms protégés à toute profondeur (notes/ et scripts/ compris), suffixes compris : Windows
+    # retire points et espaces finaux (`state.json.`) et accepte les flux (`state.json::$DATA`).
+    for name in PROTECTED_FILES:
+        for form in (name, name.upper()):
+            deny += [f"Edit(**/{form})", f"Edit(**/{form}*)"]
+    # Noms courts 8.3 (`STATE~1.JSO`) : cible indéterminable.
+    deny += ["Edit(**/*~*)", "Edit(**/*~*/**)"]
     return {
         "$schema": "https://json.schemastore.org/claude-code-settings.json",
         "enableAllProjectMcpServers": False,
@@ -200,6 +211,17 @@ def create_workspace(
         base_checkpoint,
         base_revision=base_revision,
         sessions_root=out / SESSIONS_DIR,
+    )
+    # Séance, racine et données imposées aux commandes lancées depuis l'espace (harnais, lanceur).
+    info = {
+        "workspace": str(out),
+        "session_id": session_id,
+        "sessions_root": str((out / SESSIONS_DIR).resolve()),
+        "data_dir": str((out / DATA_DIR).resolve()),
+        "repo": str(repo),
+    }
+    (out / harness.WORKSPACE_FILE).write_text(
+        json.dumps(info, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
     for d in (SCRIPTS_DIR, DATA_DIR, NOTES_DIR, ".claude"):
         (out / d).mkdir(exist_ok=True)

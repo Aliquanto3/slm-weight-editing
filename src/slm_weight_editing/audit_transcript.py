@@ -23,6 +23,7 @@ import hashlib
 import json
 import posixpath
 import re
+import shlex
 import sys
 import unicodedata
 from dataclasses import dataclass
@@ -52,7 +53,7 @@ RULES = {
     "git": "commande git ou gh (historique du dépôt)",
     "installation": "installation ou synchronisation de paquets",
     "obfuscation": "commande encodée, évaluée ou lancée par un sous-processus",
-    "hors-espace-seance": "transcription dont le dossier courant n'est pas l'espace de séance",
+    "hors-espace-seance": "dossier courant, séance, racine ou données hors de l'espace de séance",
     "journal-seance": "ligne open du journal absente, multiple ou illisible",
     "base-differente": "séance ouverte sur une base qui diffère de la révision publiée",
 }
@@ -68,7 +69,13 @@ NEUTRAL_TOOLS = {"TodoWrite", "AskUserQuestion", "ToolSearch", "EnterPlanMode", 
 WEB_TOOLS = {"WebFetch", "WebSearch"}
 AGENT_TOOLS = {"Agent", "Task"}
 
-PROTECTED_NAMES = ("state.json", "journal.jsonl", "registry.jsonl", "session.lock")
+PROTECTED_NAMES = (
+    "state.json",
+    "journal.jsonl",
+    "registry.jsonl",
+    "session.lock",
+    "workspace.json",
+)
 
 # Termes interdits cherchés aussi sous forme compacte (sans ponctuation ni espaces), pour voir
 # `"held" + "out"` ou `held`out` ; les faux positifs (« threshold out ») se relisent à la main.
@@ -134,7 +141,7 @@ _DELETE_VERB = re.compile(
     r"|move-item|\bmove\b"
 )
 _HARMLESS_REDIRECT = re.compile(r"\d?>\s*(?:/dev/null|\$null|nul\b)|\d>&\d")
-_PROTECTED_COMPACT = ("statejson", "journaljsonl", "registryjsonl", "sessionlock")
+_PROTECTED_COMPACT = ("statejson", "journaljsonl", "registryjsonl", "sessionlock", "workspacejson")
 _SESSION_DIR = re.compile(
     r"sessions/?(?=[\s;|&)\]]|$)"  # dossier des séances
     r"|sessions/[^\s/;|&]+/?(?=[\s;|&)\]]|$)"  # dossier d'une séance
@@ -306,10 +313,17 @@ def _check_code(text: str, tool: str, shell: bool) -> list[tuple[str, str]]:
     return found
 
 
+def file_name(segment: str) -> str:
+    """Nom vu par NTFS : minuscules, sans flux (`::$DATA`), sans points ni espaces finaux."""
+    return segment.lower().split(":", 1)[0].rstrip(". ")
+
+
 def _check_write_path(path: str) -> list[tuple[str, str]]:
     norm = normalize(path)
     found: list[tuple[str, str]] = []
-    name = norm.rsplit("/", 1)[-1]
+    name = file_name(norm.rsplit("/", 1)[-1])
+    if ":" in re.sub(r"^/?[a-z]:/", "", norm):
+        found.append(("ecriture-hors-liste", f"flux de fichier dans {path}"))
     if name in PROTECTED_NAMES or re.search(r"sessions/[^/]+/(?!work/)", norm):
         found.append(("etat-seance", f"écriture de {path}"))
     elif norm.endswith("/sessions") or re.search(r"(?:^|/)sessions/[^/]+/?$", norm):
@@ -374,15 +388,21 @@ class Context:
 
     workspace: str | None
     repo: str
+    session_id: str | None = None
 
     @classmethod
-    def build(cls, workspace: str | Path | None, repo: str | Path | None = None) -> Context:
+    def build(
+        cls,
+        workspace: str | Path | None,
+        repo: str | Path | None = None,
+        session_id: str | None = None,
+    ) -> Context:
         if repo is None:
             from slm_weight_editing.workspace import repo_root
 
             repo = repo_root()
         ws = None if workspace is None else _norm_path(Path(workspace).resolve().as_posix())
-        return cls(ws, _norm_path(Path(repo).resolve().as_posix()))
+        return cls(ws, _norm_path(Path(repo).resolve().as_posix()), session_id)
 
 
 def _norm_path(path: str) -> str:
@@ -423,6 +443,36 @@ def _write_allowed(path: str, ctx: Context) -> bool:
     )
 
 
+_BOUND_OPTIONS = ("--session", "--sessions-root", "--data")
+
+
+def _check_options(part: str, ctx: Context) -> list[tuple[str, str]]:
+    """Séance, racine et données d'une commande de l'espace : celles de l'espace seulement."""
+    if ctx.workspace is None:
+        return []
+    try:
+        tokens = shlex.split(part.replace("\\", "/"))
+    except ValueError:
+        return [("commande-hors-liste", f"« {part[:80]} » (guillemets)")]
+    found: list[tuple[str, str]] = []
+    for i, token in enumerate(tokens):
+        option, eq, value = token.partition("=")
+        if option not in _BOUND_OPTIONS:
+            continue
+        if not eq:
+            value = tokens[i + 1] if i + 1 < len(tokens) else ""
+        full = _absolute(value, ctx)
+        if option == "--session":
+            ok = ctx.session_id is None or value == ctx.session_id
+        elif option == "--sessions-root":
+            ok = full == f"{ctx.workspace}/sessions"
+        else:
+            ok = full is not None and full.startswith(f"{ctx.workspace}/data/")
+        if not ok:
+            found.append(("hors-espace-seance", f"{option} {value[:60]}"))
+    return found
+
+
 def check_shell(command: str, ctx: Context) -> list[tuple[str, str]]:
     """Liste blanche : chaque sous-commande doit être l'une des trois commandes de l'espace."""
     found: list[tuple[str, str]] = []
@@ -447,6 +497,8 @@ def check_shell(command: str, ctx: Context) -> list[tuple[str, str]]:
         m = _WHITELISTED.match(part)
         if m is None or _norm_path(m.group(1)) != ctx.repo:
             found.append(("commande-hors-liste", f"« {part[:80]} »"))
+        else:
+            found += _check_options(part, ctx)
     return found
 
 
@@ -539,7 +591,11 @@ def _cwd_ok(cwd: str, workspace: Path) -> bool:
 
 
 def audit_transcript(
-    path: str | Path, workspace: str | Path | None = None, *, repo: str | Path | None = None
+    path: str | Path,
+    workspace: str | Path | None = None,
+    *,
+    repo: str | Path | None = None,
+    session_id: str | None = None,
 ) -> list[Violation]:
     """Violations d'une transcription JSONL (une par règle et par appel d'outil).
 
@@ -547,7 +603,7 @@ def audit_transcript(
     """
     path = Path(path)
     source = path.name
-    ctx = Context.build(workspace, repo)
+    ctx = Context.build(workspace, repo, session_id)
     violations: list[Violation] = []
     seen_ids: set[str] = set()
     cwd_reported = False
@@ -694,6 +750,30 @@ def audit_scripts(session: str | Path) -> list[Violation]:
     return found
 
 
+def audit_batches(session: str | Path, workspace: str | Path) -> list[Violation]:
+    """Lots du journal : données lues sous `<espace>/data/` seulement."""
+    session = Path(session)
+    journal = session / "journal.jsonl"
+    data_dir = (Path(workspace) / "data").resolve()
+    found: list[Violation] = []
+    try:
+        lines = journal.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return found  # signalé par audit_session_base
+    for number, raw in enumerate(lines, start=1):
+        try:
+            entry = json.loads(raw) if raw.strip() else None
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(entry, dict) or entry.get("event") != "batch":
+            continue
+        data = str(entry.get("data_path", ""))
+        if not data or data_dir not in Path(data).resolve().parents:
+            detail = f"lot {entry.get('batch')} : données {data}"
+            found.append(Violation(journal.as_posix(), number, "hors-espace-seance", "-", detail))
+    return found
+
+
 def audit_session_base(
     session: str | Path, reference: Reference | dict[str, str], revision: str | None = None
 ) -> list[Violation]:
@@ -792,9 +872,15 @@ def run(args: argparse.Namespace) -> int:
         if not (Path(args.session_dir) / "journal.jsonl").is_file():
             print(f"Erreur : journal introuvable dans {args.session_dir}", file=sys.stderr)
             return 2
-        violations = [v for f in files for v in audit_transcript(f, args.workspace, repo=args.repo)]
+        session_id = Path(args.session_dir).resolve().name
+        violations = [
+            v
+            for f in files
+            for v in audit_transcript(f, args.workspace, repo=args.repo, session_id=session_id)
+        ]
         violations += audit_session_base(args.session_dir, reference, args.base_revision)
         violations += audit_scripts(args.session_dir)
+        violations += audit_batches(args.session_dir, args.workspace)
     except (OSError, ValueError) as exc:
         print(f"Erreur : {exc}", file=sys.stderr)
         return 2

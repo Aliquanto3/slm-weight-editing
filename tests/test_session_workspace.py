@@ -72,8 +72,13 @@ def test_workspace_layout_and_session(ws):
         "notes",
         "scripts",
         "sessions",
+        "workspace.json",
     ]
     assert (ws / "data" / "gsm8k-train.jsonl").is_file()
+    info = json.loads((ws / "workspace.json").read_text(encoding="utf-8"))
+    assert info["session_id"] == "s1"
+    assert Path(info["sessions_root"]) == (ws / "sessions").resolve()
+    assert Path(info["data_dir"]) == (ws / "data").resolve()
     state = harness.read_state(session(ws))
     assert (state.budget, state.used, state.base_revision) == (10, 0, "r0")
     assert (session(ws) / "work" / "model.safetensors").is_file()
@@ -147,7 +152,12 @@ def test_settings_json(ws):
         assert rule in deny, rule
     assert "Task" not in deny
     # Aucune règle deny ne touche work/ (deny l'emporte sur allow).
-    assert not [r for r in deny if "/work" in r or "work/" in r]
+    assert not [r for r in deny if re.search(r"(?:^|[/(*])work(?:/|\)|$)", r)]
+    # Noms protégés à toute profondeur, suffixes (`state.json.`, `::$DATA`) et casse compris.
+    for name in ("state.json", "journal.jsonl", "registry.jsonl", "session.lock", "workspace.json"):
+        for form in (name, name.upper()):
+            assert f"Edit(**/{form}*)" in deny, form
+    assert "Edit(./workspace.json)" in deny and "Edit(**/*~*)" in deny
     excludes = settings["claudeMdExcludes"]
     assert f"{REPO.resolve().parent.as_posix()}/CLAUDE.md" in excludes
     assert f"{REPO.resolve().as_posix()}/AGENTS.md" in excludes
@@ -389,7 +399,7 @@ def test_script_outside_scripts_dir_refused(ws):
     for bad in ("notes/x.py", "scripts/../notes/x.py", "scripts/absent.py"):
         with pytest.raises(harness.HarnessError, match="script refusé"):
             script_runner.run_script(bad, "s1", workspace=ws)
-    with pytest.raises(harness.HarnessError, match="hors de l'espace"):
+    with pytest.raises(harness.HarnessError, match="--sessions-root refusé"):
         (ws / "scripts" / "ok.py").write_text("print(1)", encoding="utf-8")
         script_runner.run_script("scripts/ok.py", "s1", sessions_root=ws.parent, workspace=ws)
 
@@ -438,3 +448,134 @@ def test_sandbox_needs_isolated_interpreter(ws):
         cwd=ws,
     )
     assert proc.returncode == REFUSED and "non isolé" in proc.stderr
+
+
+# Revue passe 1 : séance, racine et données imposées par workspace.json ; noms protégés.
+
+
+def forge_session(ws: Path, root: Path, budget: int = 50) -> None:
+    """Séance forgée par l'éditeur hors de sessions/ (dans notes/, écriture permise)."""
+    real, fake = session(ws), root / "s1"
+    (fake / "work").mkdir(parents=True)
+    for f in (real / "work").iterdir():
+        (fake / "work" / f.name).write_bytes(f.read_bytes())
+    state = json.loads((real / "state.json").read_text("utf-8"))
+    (fake / "state.json").write_text(json.dumps({**state, "budget": budget}), encoding="utf-8")
+    (fake / "journal.jsonl").write_text('{"event": "open"}\n', encoding="utf-8")
+
+
+@pytest.fixture
+def fake_generate(monkeypatch):
+    """Génération remplacée (frontière : le modèle réel n'est jamais chargé par les tests)."""
+    calls = []
+
+    def generate(work, problems):
+        calls.append(work)
+        return {"model": "test"}, [{"text": "2"} for _ in problems]
+
+    monkeypatch.setattr(harness, "_generate", generate)
+    return calls
+
+
+def test_run_batch_is_bound_to_the_workspace(ws, monkeypatch, capsys, fake_generate):
+    monkeypatch.chdir(ws)
+    forge_session(ws, ws / "notes" / "fake")
+    leak = ws.parent / "src-data" / "gsm8k-train.jsonl"
+    common = ["--dataset", "gsm8k", "--split", "train"]
+    data = ["--data", "data/gsm8k-train.jsonl"]
+    for bad, reason in (
+        (["--session", "s1", "--sessions-root", "notes/fake", *data], "--sessions-root refusé"),
+        (["--session", "s1", "--sessions-root", str(ws.parent), *data], "--sessions-root refusé"),
+        (["--session", "s2", *data], "séance refusée"),
+        (["--session", "s1", "--data", str(leak)], "--data refusé"),
+        (["--session", "s1", "--data", "data/../../src-data/gsm8k-train.jsonl"], "--data refusé"),
+    ):
+        assert main(["run-batch", *bad, *common]) == 2, bad
+        assert reason in capsys.readouterr().err
+    assert fake_generate == []
+    ok = ["run-batch", "--session", "s1", *data, *common]
+    assert main([*ok, "--sessions-root", "sessions"]) == 0
+    assert main(ok) == 0
+    assert len(fake_generate) == 2 and harness.read_state(session(ws)).used == 2
+    assert harness.read_state(ws / "notes" / "fake" / "s1").used == 0
+
+
+def test_session_status_is_bound_to_the_workspace(ws, monkeypatch, capsys):
+    other = ws.parent / "other"
+    other.mkdir()
+    monkeypatch.chdir(ws / "scripts")  # sous-dossier : l'espace est trouvé plus haut
+    assert main(["session-status", "--session", "s1", "--sessions-root", str(other)]) == 2
+    assert "--sessions-root refusé" in capsys.readouterr().err
+    assert main(["session-status", "--session", "s1"]) == 0
+    assert "0/10 lots" in capsys.readouterr().out
+
+
+def test_moved_workspace_file_is_refused(ws, monkeypatch, capsys):
+    (ws / "notes" / "workspace.json").write_bytes((ws / "workspace.json").read_bytes())
+    monkeypatch.chdir(ws / "notes")
+    assert main(["session-status", "--session", "s1"]) == 2
+    assert "ne désigne pas" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "fake/s1/state.json.",
+        "fake/s1/STATE.JSON",
+        "fake/s1/state.json ",
+        "fake/s1/state.json::$DATA",
+        "fake/workspace.json",
+        "fake/x.py:flux",
+    ],
+)
+def test_protected_name_variants_refused_in_scripts(ws, target):
+    (ws / "scripts" / "fake" / "s1").mkdir(parents=True)
+    before = snapshot(ws)
+    entry = run(ws, "forge.py", f"open('scripts/{target}', 'w').write('{{}}')\n")
+    assert entry["refused"], entry["output"]
+    after = snapshot(ws)
+    after.pop("scripts/forge.py")
+    assert after == before
+    assert not list((ws / "scripts" / "fake").rglob("*.*"))
+
+
+def test_launcher_runs_the_verified_copy(ws):
+    import hashlib
+
+    (ws / "scripts" / "ok.py").write_text("print('original')", encoding="utf-8")
+    sha = hashlib.sha256(b"print('original')").hexdigest()
+    copies = session(ws) / "scripts"
+    copies.mkdir(exist_ok=True)
+    (copies / f"{sha}.py").write_text("print('altere')", encoding="utf-8")
+    entry = script_runner.run_script("scripts/ok.py", "s1", workspace=ws, timeout=60)
+    assert entry["output"].strip() == "original" and entry["sha256"] == sha
+    assert (copies / f"{sha}.py").read_bytes() == b"print('original')"
+
+
+def test_sandbox_executes_the_copy_not_the_mutable_file(ws):
+    import hashlib
+    import subprocess
+
+    (ws / "scripts" / "x.py").write_text("print('mutable')", encoding="utf-8")
+    copy = ws.parent / "copy.py"
+    copy.write_text("print('copie')", encoding="utf-8")
+    cfg = {
+        "script": str(ws / "scripts" / "x.py"),
+        "source": str(copy),
+        "sha256": hashlib.sha256(b"print('copie')").hexdigest(),
+        "workspace": str(ws),
+        "read_roots": [str(ws / "scripts")],
+        "read_files": [],
+        "write_roots": [str(ws / "scripts"), str(ws / "scripts")],
+        "python_roots": script_runner._python_roots(),
+    }
+
+    def boot(cfg):
+        cmd = [sys.executable, "-I", "-B", "-X", "utf8", str(script_runner._BOOT), json.dumps(cfg)]
+        env = script_runner.child_env()
+        return subprocess.run(cmd, capture_output=True, encoding="utf-8", env=env, cwd=ws)
+
+    proc = boot(cfg)
+    assert proc.returncode == 0 and proc.stdout.strip() == "copie", proc.stderr
+    proc = boot({**cfg, "sha256": "00" * 32})
+    assert proc.returncode == REFUSED and "altérée" in proc.stderr

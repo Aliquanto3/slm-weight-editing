@@ -72,7 +72,9 @@ DENY_TOP = frozenset(
     ).split()
 )
 DENY_NUMPY = ("numpy.f2py", "numpy.distutils", "numpy.ctypeslib", "numpy.testing")
-PROTECTED = frozenset(("state.json", "journal.jsonl", "registry.jsonl", "session.lock", "freeze"))
+PROTECTED = frozenset(
+    ("state.json", "journal.jsonl", "registry.jsonl", "session.lock", "workspace.json", "freeze")
+)
 # Fichiers chargeables comme code natif ou bytecode : jamais écrits par un script.
 NATIVE_SUFFIXES = (".pyd", ".so", ".dll", ".dylib", ".pyc", ".pyo", ".pth")
 
@@ -223,8 +225,13 @@ def make_hook(cfg, stdlib, local_modules, exec_roots):
             deny(event, f"écriture hors de work/ et scripts/ : {c}")
         if _lower(c).endswith(native) or "__pycache__" in c:
             deny(event, f"fichier de code natif ou compilé : {c}")
-        for part in c[_len(base) :].split(sep):
-            if part in protected:
+        rel = c[_len(base) :]
+        if ":" in rel:
+            # Flux NTFS (`state.json::$DATA`, `x:flux`) : cible réelle indéterminable ici.
+            deny(event, f"flux de fichier interdit : {c}")
+        for part in rel.split(sep):
+            # Windows retire points et espaces finaux (`state.json.` est `state.json`).
+            if _lower(part).rstrip(". ") in protected:
                 deny(event, f"fichier de séance protégé : {c}")
 
     def hook(event, args):
@@ -247,6 +254,8 @@ def make_hook(cfg, stdlib, local_modules, exec_roots):
         if event == "exec":
             # importlib.import_module ne lève pas d'événement import : le code d'un module se
             # contrôle à son exécution (bibliothèque standard, numpy et scripts/ seulement).
+            # Un code compilé depuis une chaîne (`<string>`, amorce `<safetensors.numpy>`, modules
+            # gelés `<frozen ...>`) passe : ses imports et ses ouvertures restent contrôlés un à un.
             obj = args[0]
             if _type(obj) is _code and obj.co_filename[:1] != "<":
                 c = canon(obj.co_filename)
@@ -374,8 +383,14 @@ def _main():
         os.write(2, "run-script : interpréteur non isolé (-I -B attendus)\n".encode())
         os._exit(REFUSED)
     script = cfg["script"]
-    with open(script, "rb") as f:
+    # La copie journalisée par le lanceur, relue et vérifiée : c'est elle qui s'exécute.
+    with open(cfg["source"], "rb") as f:
         source = f.read()
+    import hashlib
+
+    if hashlib.sha256(source).hexdigest() != cfg["sha256"]:
+        os.write(2, "run-script : copie du script altérée, refus\n".encode())
+        os._exit(REFUSED)
     import numpy  # (préchargé : son import tire ctypes, interdit ensuite)
 
     _install_shim()

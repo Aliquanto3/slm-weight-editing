@@ -75,7 +75,7 @@ def run_script(
     script: str,
     session_id: str,
     *,
-    sessions_root: str | Path = "sessions",
+    sessions_root: str | Path | None = None,
     workspace: str | Path | None = None,
     timeout: float = DEFAULT_TIMEOUT,
     max_output: int = MAX_OUTPUT,
@@ -84,9 +84,13 @@ def run_script(
     workspace = Path.cwd() if workspace is None else Path(workspace)
     workspace = workspace.resolve()
     path = _resolve_script(workspace, script)
-    root = Path(sessions_root)
-    directory = harness.session_dir(session_id, root if root.is_absolute() else workspace / root)
-    directory = directory.resolve()
+    found = harness.find_workspace(workspace)
+    if found is not None and found[0] != workspace:
+        raise harness.HarnessError(f"run-script se lance depuis l'espace de séance {found[0]}")
+    root = harness.bind_workspace(
+        session_id, sessions_root, cwd=workspace, default_root=harness.WORKSPACE_SESSIONS_DIR
+    )
+    directory = harness.session_dir(session_id, root).resolve()
     if not _inside(directory, workspace):
         raise harness.HarnessError(f"séance refusée : {directory} hors de l'espace de séance")
     work = directory / harness.WORK_DIR
@@ -95,15 +99,19 @@ def run_script(
         state = harness.read_state(directory)
         if state.frozen:
             raise harness.HarnessError("séance gelée : plus aucun script")
+        # Lecture unique : la copie journalisée (vérifiée par son sha256) est ce qui s'exécute,
+        # pas le fichier de scripts/, que l'éditeur pourrait changer pendant le lancement.
         source = path.read_bytes()
         sha256 = hashlib.sha256(source).hexdigest()
         copies = directory / COPIES_DIR
         copies.mkdir(exist_ok=True)
         copy = copies / f"{sha256}.py"
-        if not copy.exists():
+        if not copy.is_file() or hashlib.sha256(copy.read_bytes()).hexdigest() != sha256:
             copy.write_bytes(source)
         cfg = {
             "script": str(path),
+            "source": str(copy),
+            "sha256": sha256,
             "workspace": str(workspace),
             "read_roots": [str(work), str(workspace / SCRIPTS_DIR), str(workspace / DATA_DIR)],
             "read_files": [str(directory / harness.JOURNAL_FILE), str(directory / "state.json")],
@@ -168,7 +176,9 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     )
     p.add_argument("script", help="chemin du script sous scripts/")
     p.add_argument("--session", required=True)
-    p.add_argument("--sessions-root", default="sessions", help="dossier des séances de l'espace")
+    p.add_argument(
+        "--sessions-root", help="dossier des séances (celui de workspace.json dans un espace)"
+    )
     p.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help="secondes (défaut 1800)")
     p.set_defaults(func=run)
 
