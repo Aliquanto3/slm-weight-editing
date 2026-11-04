@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -104,6 +105,8 @@ def _check_pair(st: SafeTensor, info: TensorInfo) -> None:
             f"{st.name} {list(st.shape)} et {info.name} {list(info.dims)} (ordre ggml) : "
             "formes incompatibles sans transposition"
         )
+    if st.end - st.start != 2 * math.prod(st.shape):
+        raise ReportError(f"{st.name} : {st.end - st.start} octets pour la forme {list(st.shape)}")
 
 
 def quantize_tensor(st: SafeTensor, intermediate: str) -> bytes:
@@ -210,6 +213,15 @@ def _write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", "utf-8")
 
 
+def public_text(text: str) -> str:
+    """Remplace le dossier personnel par `~` : diff.json est destiné à un dépôt public."""
+    home = Path.home()
+    prefixes = {str(home), home.as_posix(), str(home.resolve()), home.resolve().as_posix()}
+    for prefix in sorted(prefixes, key=len, reverse=True):
+        text = text.replace(prefix, "~")
+    return text
+
+
 def report_gguf(
     checkpoint: str | Path,
     out_dir: str | Path,
@@ -222,9 +234,56 @@ def report_gguf(
     intermediate: str = "f32",
     command: str | None = None,
 ) -> ReportResult:
+    out = Path(out_dir)
+    stem = tag.replace(":", "-").replace("/", "-")
+    paths = ReportResult(
+        out / f"{stem}.gguf", out / "Modelfile", out / "diff.json", out / "fidelite.json"
+    )
+    written: set[Path] = set()
+    try:
+        return _report(
+            checkpoint,
+            paths,
+            written,
+            model=model,
+            tag=tag,
+            store=store,
+            base_checkpoint=base_checkpoint,
+            expected_sha256=expected_sha256,
+            intermediate=intermediate,
+            command=command,
+        )
+    except BaseException:
+        # Un échec ne laisse aucune sortie d'une séance précédente : `ollama create` ne doit pas
+        # charger une édition périmée. Seul fidelite.json de cette séance reste, pour le détail.
+        stale = [paths.gguf, paths.gguf.with_name(paths.gguf.name + ".partial")]
+        stale += [paths.modelfile, paths.diff, paths.fidelity]
+        for path in stale:
+            if path not in written or path != paths.fidelity:
+                path.unlink(missing_ok=True)
+        raise
+
+
+def _report(
+    checkpoint: str | Path,
+    paths: ReportResult,
+    written: set[Path],
+    *,
+    model: str,
+    tag: str,
+    store: str | Path | None,
+    base_checkpoint: str | Path | None,
+    expected_sha256: dict[str, str] | None,
+    intermediate: str,
+    command: str | None,
+) -> ReportResult:
     expected = WSP_EDITED_SHA256 if expected_sha256 is None else expected_sha256
     official = load_model(model, store)
     gguf = read_gguf(official.model_blob)
+    # Blob officiel vérifié d'abord : corrompu, il ferait échouer à tort le contrôle de fidélité.
+    source_sha = sha256_file(official.model_blob)
+    if f"sha256:{source_sha}" != official.model_digest:
+        raise ReportError(f"blob {official.model_digest} corrompu (sha256 {source_sha})")
     edited = open_checkpoint(checkpoint)
     base = open_checkpoint(base_checkpoint) if base_checkpoint else None
 
@@ -256,10 +315,10 @@ def report_gguf(
                 raise ReportError(f"{hf_name} absent du checkpoint de base {base_checkpoint}")
             controls.append(("checkpoint de base, original du tenseur visé", base[hf_name]))
     fidelity = fidelity_check(controls, gguf, intermediate)
-    out = Path(out_dir)
+    out = paths.gguf.parent
     out.mkdir(parents=True, exist_ok=True)
-    fidelity_path = out / "fidelite.json"
-    _write_json(fidelity_path, fidelity)
+    _write_json(paths.fidelity, fidelity)
+    written.add(paths.fidelity)
     if not fidelity["ok"]:
         failed = [t["gguf_name"] for t in fidelity["tensors"] if not t["ok"]]
         reason = "aucun tenseur témoin" if not controls else f"écart sur {', '.join(failed)}"
@@ -268,9 +327,6 @@ def report_gguf(
         )
 
     # 3. Requantification des tenseurs visés et réécriture des seules plages concernées.
-    source_sha = sha256_file(official.model_blob)
-    if f"sha256:{source_sha}" != official.model_digest:
-        raise ReportError(f"blob {official.model_digest} corrompu (sha256 {source_sha})")
     entries, patches = [], []
     for st, info in targets:
         before = gguf.read_tensor_bytes(info.name)
@@ -297,8 +353,9 @@ def report_gguf(
                 "gguf_blocks_changed": q8_0_gap(before, after, info.dims[0])["blocks_differing"],
             }
         )
-    stem = tag.replace(":", "-").replace("/", "-")
-    gguf_path = out / f"{stem}.gguf"
+    gguf_path, modelfile = paths.gguf, paths.modelfile
+    # Modelfile rendu avant l'écriture du GGUF : un texte non transcriptible n'écrit rien.
+    modelfile_text = render_modelfile(gguf_path, official)
     partial = gguf_path.with_name(gguf_path.name + ".partial")
     shutil.copyfile(official.model_blob, partial)
     with partial.open("r+b") as f:
@@ -307,9 +364,8 @@ def report_gguf(
             f.write(data)
     os.replace(partial, gguf_path)
 
-    # 4. Modelfile et diff vérifiable.
-    modelfile = out / "Modelfile"
-    modelfile.write_text(render_modelfile(gguf_path, official), "utf-8")
+    # 4. Modelfile et diff vérifiable (chemins personnels masqués : le diff se publie).
+    modelfile.write_text(modelfile_text, "utf-8")
     diff = {
         "format": DIFF_FORMAT,
         "tag": tag,
@@ -328,9 +384,8 @@ def report_gguf(
         },
         "fidelity": {k: fidelity[k] for k in ("intermediate", "controls", "passed", "ok")},
         "modelfile": {"renderer": official.renderer, "parser": official.parser},
-        "apply": command,
-        "ollama_create": f"ollama create {tag} -f {modelfile.resolve().as_posix()}",
+        "apply": public_text(command) if command is not None else None,
+        "ollama_create": public_text(f"ollama create {tag} -f {modelfile.as_posix()}"),
     }
-    diff_path = out / "diff.json"
-    _write_json(diff_path, diff)
-    return ReportResult(gguf_path, modelfile, diff_path, fidelity_path)
+    _write_json(paths.diff, diff)
+    return paths

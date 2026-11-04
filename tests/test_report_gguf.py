@@ -226,3 +226,69 @@ def test_cli_reports_a_missing_manifest(tmp_path, capsys):
     )
     assert code == 1
     assert "manifeste de qwen3.5:0.8b introuvable" in capsys.readouterr().err
+
+
+def test_failed_rerun_removes_the_previous_outputs(tmp_path):
+    out = tmp_path / "out"
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    good = run(build(tmp_path / "a"), out)
+    assert good.gguf.exists() and good.modelfile.exists() and good.diff.exists()
+    with pytest.raises(FidelityError, match="aucun GGUF écrit"):
+        run(build(tmp_path / "b", tamper=flip_quantum), out)
+    assert list(out.iterdir()) == [out / "fidelite.json"]
+    assert not json.loads((out / "fidelite.json").read_text("utf-8"))["ok"]
+
+
+def test_sha_failure_after_a_success_leaves_no_output(synth, tmp_path):
+    out = tmp_path / "out"
+    run(synth, out)
+    with pytest.raises(ShaMismatchError):
+        run(synth, out, expected_sha256={TARGET: "0" * 64})
+    assert list(out.iterdir()) == []
+
+
+def test_unrenderable_modelfile_writes_no_gguf(tmp_path):
+    s = build(tmp_path, system='dit """ trois guillemets')
+    out = tmp_path / "out"
+    with pytest.raises(ReportError, match="SYSTEM"):
+        run(s, out)
+    assert list(out.iterdir()) == [out / "fidelite.json"]
+
+
+def test_corrupted_blob_is_refused_before_the_fidelity_check(synth, tmp_path):
+    (blob,) = [p for p in (synth.store / "blobs").iterdir() if p.stat().st_size > 1000]
+    data = bytearray(blob.read_bytes())
+    data[-1] ^= 1
+    blob.write_bytes(bytes(data))
+    with pytest.raises(ReportError, match="corrompu") as exc:
+        run(synth, tmp_path / "out")
+    assert not isinstance(exc.value, FidelityError)
+
+
+def test_replaying_the_diff_gives_the_same_output_sha(synth, tmp_path):
+    first = json.loads(run(synth, tmp_path / "un").diff.read_text("utf-8"))
+    second = json.loads(run(synth, tmp_path / "deux").diff.read_text("utf-8"))
+    assert first["gguf"]["output_sha256"] == second["gguf"]["output_sha256"]
+    assert first["tensors"] == second["tensors"]
+
+
+def test_diff_masks_the_home_directory(synth, tmp_path, monkeypatch):
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    out = tmp_path / "out"
+    result = run(synth, out, command=f"uv run slm-weight-editing --out {out.as_posix()}")
+    text = result.diff.read_text("utf-8")
+    assert str(tmp_path) not in text and tmp_path.as_posix() not in text
+    diff = json.loads(text)
+    assert diff["apply"] == "uv run slm-weight-editing --out ~/out"
+    assert diff["ollama_create"] == "ollama create qwen3.5-wsp:0.8b -f ~/out/Modelfile"
+
+
+def test_cli_reports_an_unreadable_manifest(synth, tmp_path, capsys):
+    manifest = synth.store / "manifests" / "registry.ollama.ai" / "library" / "qwen3.5" / "0.8b"
+    manifest.write_text("{pas du json", "utf-8")
+    code = slm_weight_editing.main(
+        ["report-gguf", "--checkpoint", str(synth.checkpoint), "--ollama-models", str(synth.store)]
+    )
+    assert code == 1
+    assert "illisible" in capsys.readouterr().err

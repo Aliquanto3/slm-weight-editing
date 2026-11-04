@@ -80,9 +80,12 @@ def load_model(model: str, store: str | Path | None = None) -> OllamaModel:
     manifest = manifest_path(root, model)
     if not manifest.is_file():
         raise OllamaStoreError(f"manifeste de {model} introuvable : {manifest}")
-    data = json.loads(manifest.read_text("utf-8"))
-    config = json.loads(_read_blob(root, data["config"]["digest"]))
-    layers = {layer["mediaType"].removeprefix(MEDIA_PREFIX): layer for layer in data["layers"]}
+    try:
+        data = json.loads(manifest.read_text("utf-8"))
+        config = json.loads(_read_blob(root, data["config"]["digest"]))
+        layers = {layer["mediaType"].removeprefix(MEDIA_PREFIX): layer for layer in data["layers"]}
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise OllamaStoreError(f"manifeste ou configuration de {model} illisible : {exc}") from exc
     if "model" not in layers:
         raise OllamaStoreError(f"{model} : pas de couche de modèle dans le manifeste")
     digest = layers["model"]["digest"]
@@ -93,7 +96,12 @@ def load_model(model: str, store: str | Path | None = None) -> OllamaModel:
     def text(kind: str) -> str | None:
         return _read_blob(root, layers[kind]["digest"]).decode("utf-8") if kind in layers else None
 
-    params = json.loads(text("params")) if "params" in layers else {}
+    try:
+        params = (
+            json.loads(_read_blob(root, layers["params"]["digest"])) if "params" in layers else {}
+        )
+    except ValueError as exc:
+        raise OllamaStoreError(f"paramètres de {model} illisibles : {exc}") from exc
     return OllamaModel(
         model=model,
         store=root,

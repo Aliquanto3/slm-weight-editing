@@ -26,3 +26,22 @@ capabilities: [CAP-1, CAP-2, CAP-3]
 - Contrôle de fidélité réel : à lancer par Anaël après téléchargement du checkpoint ; s'il échoue, essayer `--intermediate f16` (export F16 puis quantifié) ou décider de la suite.
 - Seule correspondance HF → GGUF prise en charge : `down_proj` → `ffn_down` (vérifiée sur le GGUF). Les autres tenseurs et `mtp.*` sont refusés.
 - Champ `requires` de la configuration officielle non repris dans le Modelfile.
+
+## Revue
+
+### Passe 1 (2026-11-04, SHA revu 3acf3ae)
+
+Base à jour (origin/main b718329), aucun rebase. Q8_0 vérifié contre `quantize_row_q8_0_ref` (d = amax/127, id = 1/d, roundf) et contre gguf-py, un oracle externe. Aucun constat high ni medium.
+
+- Nit, low, second avis n° 3 : corrigé. Un échec relancé dans le même `--out` laissait le GGUF, le Modelfile et le diff de la séance précédente, et `ollama create` pouvait charger une édition périmée. Tout échec les supprime désormais ; seul `fidelite.json` de la séance reste.
+- Nit, low, second avis n° 7 : corrigé. `apply` et `ollama_create` de `diff.json` contenaient des chemins `C:/Users/...` ; le dossier personnel y est remplacé par `~`, et `ollama_create` reprend le `--out` donné. Le `FROM` du Modelfile reste absolu : le Modelfile est local (`models/` ignoré) et n'est pas publié.
+- Nit, low, second avis n° 1 : corrigé, le `.partial` est supprimé sur échec ou interruption (même mécanisme que le n° 3).
+- Nit, low, second avis n° 2 : corrigé, le Modelfile est rendu avant l'écriture du GGUF.
+- Nit, low, second avis n° 5 : corrigé, le blob officiel est vérifié avant le contrôle de fidélité.
+- Nit, low, second avis n° 6 : corrigé. Un manifeste, une configuration, des params ou un en-tête safetensors illisibles donnent maintenant `OllamaStoreError` ou `SafetensorsError` (code 1), plus de traceback.
+- Nit, low, second avis n° 4 : rejeté. `base.revision` décrit la référence publiée (`reference-mit.md`) ; l'édition est identifiée par les sha256 des tenseurs, et `hf_bf16_sha256_before` est mesuré quand la base est fournie.
+- Nit, low, second avis n° 8 : corrigé en partie. Rejouer `apply` revérifie les sha256 publiés (étape 1) ; un test vérifie maintenant que deux séances donnent le même `output_sha256` et les mêmes entrées. Pas d'outil de rejeu à part, qui reste à décider au lot 1 (CAP-2 avec un diff gelé).
+- Nit, low, revue (diagnostics Pyright) : corrigé. Un `general.alignment` non entier ou nul donne `GGUFError` et non plus un `ZeroDivisionError` ; le type des params est lu sans `str | None`.
+- Nit, low, revue : corrigé. La taille en octets d'un tenseur safetensors est comparée à sa forme ; avant, un écart produisait une erreur numpy non capturée.
+- Complexité : 0 constat (aucune structure qui grossit à l'exécution).
+- Report (inchangé) : contrôle de fidélité sur le vrai GGUF et le vrai checkpoint, à lancer par Anaël.

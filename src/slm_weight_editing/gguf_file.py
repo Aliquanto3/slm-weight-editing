@@ -142,7 +142,9 @@ def read_gguf(path: str | Path) -> GGUFFile:
             n_dims = cur.unpack("I")
             dims = tuple(cur.unpack("Q") for _ in range(n_dims))
             raw.append((name, dims, cur.unpack("I"), cur.unpack("Q")))
-        alignment = int(metadata.get("general.alignment", DEFAULT_ALIGNMENT))
+        alignment = metadata.get("general.alignment", DEFAULT_ALIGNMENT)
+        if not isinstance(alignment, int) or alignment <= 0:
+            raise GGUFError(f"alignement GGUF invalide : {alignment!r}")
         data_offset = -(-cur.pos // alignment) * alignment
         size = len(buf)
     tensors = {}

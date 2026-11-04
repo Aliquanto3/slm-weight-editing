@@ -40,16 +40,22 @@ def _read_header(path: Path) -> dict[str, SafeTensor]:
         if len(head) != 8:
             raise SafetensorsError(f"{path} : en-tête safetensors absent")
         (n,) = struct.unpack("<Q", head)
-        header = json.loads(f.read(n))
+        try:
+            header = json.loads(f.read(n))
+        except (ValueError, MemoryError, OverflowError) as exc:
+            raise SafetensorsError(f"{path} : en-tête safetensors illisible ({exc})") from exc
     base = 8 + n
     out = {}
-    for name, entry in header.items():
-        if name == "__metadata__":
-            continue
-        start, end = entry["data_offsets"]
-        out[name] = SafeTensor(
-            name, entry["dtype"], tuple(entry["shape"]), path, base + start, base + end
-        )
+    try:
+        for name, entry in header.items():
+            if name == "__metadata__":
+                continue
+            start, end = entry["data_offsets"]
+            out[name] = SafeTensor(
+                name, entry["dtype"], tuple(entry["shape"]), path, base + start, base + end
+            )
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise SafetensorsError(f"{path} : en-tête safetensors invalide ({exc})") from exc
     return out
 
 
