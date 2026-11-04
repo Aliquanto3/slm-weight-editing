@@ -1,6 +1,6 @@
 # Statuts du lot 1 (id N de stories.yaml = story 1.N). Mis à jour par l'orchestrateur du run.
 generated: 2026-11-04 08:48
-last_updated: 2026-11-04 09:25
+last_updated: 2026-11-04 09:53
 project: slm-weight-editing
 tracking_system: file-system
 story_location: _bmad-output/specs/spec-slm-weight-editing
@@ -10,6 +10,6 @@ development_status:
   1-2-campagne-wsp-20261104: done
   1-3-harnais-budget-de-lots: done
   1-4-gel-et-diff-verifiable: done
-  1-5-protocole-seance-claude: in-progress
+  1-5-protocole-seance-claude: review
   1-6-comparaison-deux-editions: done
   1-7-campagne-lot-1-banc: backlog

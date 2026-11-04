@@ -92,3 +92,5 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 - 2026-11-04 09:23 · 1.5 · décision · audit textuel insuffisant seul : vérification d'un mode liste blanche et d'un lanceur de scripts à garde-fous d'exécution avant la revue · —
 - 2026-11-04 09:25 · 1.5 · décision · refonte en trois couches : espace de séance hors du dépôt (dontAsk, blockReads/blockWrites, liste blanche), lanceur run-script (python -I, audit hook), audit renforcé ; pas de sandbox sous Windows natif (doc officielle) · —
 - 2026-11-04 09:25 · 1.5 · dev · reprise lancée (dev-story Opus, même branche) · —
+- 2026-11-04 09:53 · 1.5 · dev · reprise finie, 315 tests verts ; espace hors dépôt, lanceur run-script, audit renforcé · 5a2b88c
+- 2026-11-04 09:53 · 1.5 · second-avis · relancé sur la reprise · —
