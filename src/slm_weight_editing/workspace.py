@@ -198,6 +198,11 @@ def check_location(out: Path, repo: Path) -> None:
         raise WorkspaceError(f"espace refusé : {out} existe et n'est pas vide")
 
 
+def cuda_platform() -> bool:
+    """L'extra `cuda` ne résout une roue CUDA que sous Windows (remplacé dans les tests)."""
+    return sys.platform == "win32"
+
+
 def create_workspace(
     out: str | Path,
     session_id: str,
@@ -210,6 +215,10 @@ def create_workspace(
     cuda: bool = False,
 ) -> Path:
     """Ouvre la séance dans `<out>/sessions` et écrit l'espace de l'éditeur ; renvoie `<out>`."""
+    if cuda and not cuda_platform():
+        # L'extra `cuda` ne pointe vers une roue CUDA que sous Windows (cu132) : ailleurs,
+        # `uv sync --extra cuda` échoue (macOS) ou installe torch CPU (Linux).
+        raise harness.HarnessError("--cuda refusé : l'extra cuda ne vise que Windows")
     out = Path(out).resolve()
     repo = repo_root() if repo is None else Path(repo).resolve()
     check_location(out, repo)

@@ -615,11 +615,12 @@ def test_checkpoint_generation_config_cannot_change_decoding(tmp_path, train_fil
     assert files["config.json"] == before["config.json"]
 
 
-def fake_cuda(monkeypatch, seen=None):
+def fake_cuda(monkeypatch, seen=None, free=8 << 30):
     """CUDA simulé : pilote, nom de GPU et génération remplacés ; aucun GPU réel."""
     monkeypatch.setattr(harness, "_cuda_available", lambda: True)
     monkeypatch.setattr(torch.cuda, "get_device_name", lambda index: "NVIDIA GeForce RTX 3050")
     monkeypatch.setattr(torch.version, "cuda", "13.2")
+    monkeypatch.setattr(harness, "_cuda_free_bytes", lambda: free)
 
     def fake_generate(work, problems, device):
         if seen is not None:
@@ -733,3 +734,84 @@ def test_generate_releases_gpu_memory(monkeypatch, tmp_path):
     harness._generate(tmp_path, [], "cuda")
     harness._generate(tmp_path, [], "cpu")
     assert calls == ["empty"]
+
+
+# Revue passe 1 : séances antérieures à --device, mémoire GPU contrôlée avant la réservation.
+
+
+def test_reserve_without_device_counts_as_cpu(root, stop_ckpt, train_file, monkeypatch):
+    open_s(root, stop_ckpt, 10)
+    import dataclasses
+
+    state = harness.read_state(root / "s1")
+    harness._write_state(root / "s1", dataclasses.replace(state, used=1))
+    harness._append_journal(root / "s1", {"event": "reserve", "batch": 1, "budget": 10})
+    fake_cuda(monkeypatch)
+    with pytest.raises(HarnessError, match="la séance tourne sur cpu, pas sur cuda"):
+        harness.run_batch(
+            "s1", "gsm8k", "train", train_file, count=1, sessions_root=root, device="auto"
+        )
+
+
+def write_fake_weights(work: Path, dtype: str, numel: int) -> None:
+    """En-tête safetensors d'un seul tenseur de `numel` éléments (octets non écrits)."""
+    import struct
+
+    stored = {"F32": 4, "BF16": 2}[dtype]
+    header = {"w": {"dtype": dtype, "shape": [numel], "data_offsets": [0, numel * stored]}}
+    raw = json.dumps(header).encode()
+    with (work / "model.safetensors").open("wb") as f:
+        f.write(struct.pack("<Q", len(raw)) + raw)
+        f.truncate(8 + len(raw) + numel * stored)
+
+
+@pytest.mark.parametrize(
+    ("config_dtype", "stored", "expected"),
+    [("bfloat16", "BF16", 2), ("float32", "F32", 4), ("bfloat16", "F32", 2), (None, "F32", 4)],
+)
+def test_weights_bytes_follow_loaded_dtype(tmp_path, config_dtype, stored, expected):
+    work = tmp_path / "work"
+    work.mkdir()
+    config = {} if config_dtype is None else {"dtype": config_dtype}
+    (work / "config.json").write_text(json.dumps(config), "utf-8")
+    write_fake_weights(work, stored, 1000)
+    assert harness.weights_bytes(work) == (1000 * expected, config_dtype)
+
+
+def test_fp32_checkpoint_too_big_for_gpu_refused_without_consuming_batch(
+    root, stop_ckpt, train_file, monkeypatch
+):
+    seen = []
+    fake_cuda(monkeypatch, seen, free=8 << 30)
+    open_s(root, stop_ckpt, 10)
+    work = root / "s1" / "work"
+    (work / "config.json").write_text(json.dumps({"dtype": "float32"}), "utf-8")
+    for f in work.glob("*.safetensors"):
+        f.unlink()
+    write_fake_weights(work, "F32", 2_000_000_000)  # 2 Md de paramètres fp32 : 8 Go
+    with pytest.raises(HarnessError, match="mémoire GPU insuffisante") as exc:
+        harness.run_batch(
+            "s1", "gsm8k", "train", train_file, count=1, sessions_root=root, device="auto"
+        )
+    assert "pas de conversion en bf16" in str(exc.value)
+    assert seen == []
+    assert harness.read_state(root / "s1").used == 0
+    assert [e["event"] for e in harness.read_journal(root / "s1")] == ["open"]
+
+
+def test_bf16_checkpoint_fits_gpu(tmp_path, monkeypatch):
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "config.json").write_text(json.dumps({"dtype": "bfloat16"}), "utf-8")
+    write_fake_weights(work, "BF16", 2_000_000_000)  # 4 Go
+    monkeypatch.setattr(harness, "_cuda_free_bytes", lambda: 7 << 30)
+    harness.check_cuda_memory(work)
+    monkeypatch.setattr(harness, "_cuda_free_bytes", lambda: 4 << 30)
+    with pytest.raises(HarnessError, match="mémoire GPU insuffisante") as exc:
+        harness.check_cuda_memory(work)
+    assert "conversion" not in str(exc.value)
+
+
+def test_cpu_batch_never_queries_gpu_memory(root, stop_ckpt, train_file):
+    open_s(root, stop_ckpt, 10)
+    harness.run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)

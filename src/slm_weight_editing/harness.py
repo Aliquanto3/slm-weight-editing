@@ -455,12 +455,75 @@ def device_info(device: str) -> dict:
 def _check_device_unchanged(journal: list[dict], device: str) -> None:
     """L'appareil d'une séance est fixé par son premier lot : le décodage glouton peut différer
     entre CPU et GPU, un changement fausserait la comparaison des lots."""
-    previous = {e["device"] for e in journal if e.get("event") == "reserve" and "device" in e}
+    # Un `reserve` sans appareil date d'avant `--device` : ces lots ont tourné sur CPU.
+    previous = {e.get("device", "cpu") for e in journal if e.get("event") == "reserve"}
     if previous and previous != {device}:
         raise HarnessError(
             f"changement d'appareil refusé : la séance tourne sur {sorted(previous)[0]}, "
             f"pas sur {device}"
         )
+
+
+# Marge GPU en plus des poids : cache KV (4096 jetons), activations, contexte CUDA.
+CUDA_MARGIN_BYTES = 1 << 30
+CUDA_MARGIN_RATIO = 0.1
+_DTYPE_BYTES = {"float32": 4, "float16": 2, "bfloat16": 2, "F32": 4, "F16": 2, "BF16": 2}
+
+
+def _cuda_free_bytes() -> int:
+    """Mémoire libre du GPU 0 (remplacé dans les tests)."""
+    import torch
+
+    return int(torch.cuda.mem_get_info(0)[0])
+
+
+def _checkpoint_dtype(work: Path) -> str | None:
+    """dtype déclaré par config.json (celui que charge `dtype="auto"`), None s'il manque."""
+    try:
+        config = json.loads((work / "config.json").read_text(encoding="utf-8"))
+    except OSError, ValueError:
+        return None
+    value = config.get("dtype") or config.get("torch_dtype")
+    return str(value).removeprefix("torch.") if value else None
+
+
+def weights_bytes(work: Path) -> tuple[int, str | None]:
+    """Octets des poids une fois chargés au dtype du checkpoint, et ce dtype."""
+    from math import prod
+
+    from slm_weight_editing.safetensors_file import open_checkpoint
+
+    dtype = _checkpoint_dtype(work)
+    loaded = _DTYPE_BYTES.get(dtype or "")
+    total = 0
+    for t in open_checkpoint(work).values():
+        stored = t.end - t.start
+        floating = t.dtype in _DTYPE_BYTES
+        total += prod(t.shape) * loaded if loaded and floating else stored
+    return total, dtype
+
+
+def check_cuda_memory(work: Path) -> None:
+    """Refuse le lot avant sa réservation si les poids ne tiennent pas dans le GPU.
+
+    Pas de conversion implicite (fp32 vers bf16) : elle changerait le décodage glouton.
+    """
+    need, dtype = weights_bytes(work)
+    required = int(need * (1 + CUDA_MARGIN_RATIO)) + CUDA_MARGIN_BYTES
+    free = _cuda_free_bytes()
+    if required <= free:
+        return
+    gib = 1 << 30
+    detail = (
+        f"poids {need / gib:.1f} Gio ({dtype or 'dtype inconnu'}) + marge, "
+        f"{required / gib:.1f} Gio requis, {free / gib:.1f} Gio libres sur le GPU"
+    )
+    hint = (
+        " ; checkpoint float32 : pas de conversion en bf16, elle changerait le décodage"
+        if dtype == "float32"
+        else ""
+    )
+    raise HarnessError(f"--device cuda refusé : mémoire GPU insuffisante ({detail}){hint}")
 
 
 def _generate(work: Path, problems: list[dict], device: str = "cpu") -> tuple[dict, list[dict]]:
@@ -560,6 +623,8 @@ def run_batch(
         actual_device = resolve_device(device)
         _check_device_unchanged(read_journal(directory), actual_device)
         work = directory / WORK_DIR
+        if actual_device == "cuda":
+            check_cuda_memory(work)
         hashes = tensor_hashes(work)
         files = work_file_hashes(work)
         data_sha256 = _sha256_file(resolved)

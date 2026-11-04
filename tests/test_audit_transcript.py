@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import re
@@ -766,12 +767,34 @@ def test_batches_outside_workspace_data_are_flagged(tmp_path):
 # Poste de séance avec GPU : `--extra cuda` est la seule option uv admise en plus de --project.
 
 UV_CUDA = f"uv run --project {REPO_POSIX} --extra cuda slm-weight-editing"
+UV_PLAIN = f"uv run --project {REPO_POSIX} slm-weight-editing"
+CTX_CUDA = dataclasses.replace(CTX_S1, cuda=True)
 
 
 @pytest.mark.parametrize("sub", ["run-batch", "session-status", "run-script"])
 def test_extra_cuda_is_accepted(sub):
     cmd = f"{UV_CUDA} {sub} --session s1 --sessions-root {WS.as_posix()}/sessions"
-    assert audit.check_shell(cmd, CTX_S1) == []
+    assert audit.check_shell(cmd, CTX_CUDA) == []
+
+
+@pytest.mark.parametrize(("ctx", "prefix"), [(CTX_CUDA, UV_PLAIN), (CTX_S1, UV_CUDA)])
+def test_extra_cuda_must_match_workspace(ctx, prefix):
+    """Espace --cuda : l'extra est exigé (sinon uv retire torch CUDA) ; espace CPU : interdit."""
+    cmd = f"{prefix} session-status --session s1 --sessions-root {WS.as_posix()}/sessions"
+    found = audit.check_shell(cmd, ctx)
+    assert rules_of(found) == {"commande-hors-liste"}
+    assert "--extra cuda" in found[0][1]
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [(None, False), ({"cuda": False}, False), ({"cuda": True}, True), ({"cuda": "yes"}, False)],
+)
+def test_context_reads_cuda_from_workspace_json(tmp_path, content, expected):
+    if content is not None:
+        (tmp_path / "workspace.json").write_text(json.dumps(content), "utf-8")
+    assert audit.Context.build(tmp_path, REPO, "s1").cuda is expected
+    assert audit.Context.build(None).cuda is None
 
 
 @pytest.mark.parametrize(
@@ -794,7 +817,7 @@ def test_other_uv_options_are_refused(uv_options):
         f"uv run --project {REPO_POSIX} {uv_options} slm-weight-editing "
         f"session-status --session s1 --sessions-root {WS.as_posix()}/sessions"
     )
-    assert "commande-hors-liste" in rules_of(audit.check_shell(cmd, CTX_S1)), uv_options
+    assert "commande-hors-liste" in rules_of(audit.check_shell(cmd, CTX_CUDA)), uv_options
 
 
 def test_extra_cuda_does_not_open_python():

@@ -152,10 +152,12 @@ uv sync --extra cuda
 uv run --extra cuda python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 ```
 
+L'extra `cuda` ne vise que Windows (roue cu132 Windows seulement) : sous macOS, `uv sync --extra cuda` échoue, sous Linux il installe torch CPU, et `session-workspace --cuda` y est refusé.
+
 Toute commande `uv run` du poste porte `--extra cuda` : sans lui, `uv run` resynchronise l'environnement et retire la roue CUDA. L'espace de séance se crée avec `--cuda` : les règles `allow`, la consigne et le `CLAUDE.md` de séance écrivent alors `uv run --project <dépôt> --extra cuda slm-weight-editing ...`, et l'audit accepte cette forme (et aucune autre option d'`uv`).
 
 ```
 uv run --extra cuda slm-weight-editing session-workspace --cuda --out %USERPROFILE%\seances\s1 --session s1 ...
 ```
 
-`run-batch --device auto|cpu|cuda` (défaut `auto` : CUDA si disponible, sinon CPU ; `cuda` sans GPU est refusé). L'appareil est fixé par le premier lot de la séance (même un lot qui plante) : un lot sur un autre appareil est refusé sans consommer de budget, car le décodage glouton peut différer entre CPU et GPU. Chaque lot journalise l'appareil, le nom du GPU et les versions de torch et de CUDA ; le dtype est celui du checkpoint (bf16 si le modèle l'est), la mémoire GPU est libérée après chaque lot.
+`run-batch --device auto|cpu|cuda` (défaut `auto` : CUDA si disponible, sinon CPU ; `cuda` sans GPU est refusé). L'appareil est fixé par le premier lot de la séance (même un lot qui plante) : un lot sur un autre appareil est refusé sans consommer de budget, car le décodage glouton peut différer entre CPU et GPU. Chaque lot journalise l'appareil, le nom du GPU et les versions de torch et de CUDA ; le dtype est celui du checkpoint (bf16 si le modèle l'est), la mémoire GPU est libérée après chaque lot. Sur CUDA, avant de réserver le lot, le harnais compare la taille des poids au dtype chargé (plus 10 % et 1 Gio de marge) à la mémoire libre du GPU : s'ils ne tiennent pas, le lot est refusé sans être consommé, sans conversion implicite d'un checkpoint fp32 en bf16 (elle changerait le décodage).

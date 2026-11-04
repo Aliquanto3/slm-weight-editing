@@ -177,7 +177,8 @@ def test_instructions_are_rendered(ws):
 
 
 @pytest.fixture
-def ws_cuda(tmp_path, base) -> Path:
+def ws_cuda(tmp_path, base, monkeypatch) -> Path:
+    monkeypatch.setattr(workspace, "cuda_platform", lambda: True)
     data = tmp_path / "src-data" / "gsm8k-train.jsonl"
     data.parent.mkdir()
     data.write_text('{"split": "train", "question": "1+1"}\n', encoding="utf-8")
@@ -223,7 +224,8 @@ def test_cuda_allow_rules_match_audit_whitelist(ws_cuda):
         assert audit.check_shell(full, ctx) == [], full
 
 
-def test_cli_cuda_flag(tmp_path, base, capsys):
+def test_cli_cuda_flag(tmp_path, base, capsys, monkeypatch):
+    monkeypatch.setattr(workspace, "cuda_platform", lambda: True)
     data = tmp_path / "gsm8k-train.jsonl"
     data.write_text('{"split": "train", "question": "1+1"}\n', encoding="utf-8")
     out = tmp_path / "ws"
@@ -231,6 +233,15 @@ def test_cli_cuda_flag(tmp_path, base, capsys):
     args += ["--base-checkpoint", str(base), "--data", str(data), "--cuda"]
     assert main(args) == 0
     assert "--extra cuda" in (out / "CONSIGNE.md").read_text(encoding="utf-8")
+
+
+def test_cuda_workspace_refused_outside_windows(tmp_path, base, monkeypatch):
+    monkeypatch.setattr(workspace, "cuda_platform", lambda: False)
+    data = tmp_path / "gsm8k-train.jsonl"
+    data.write_text('{"split": "train", "question": "1+1"}\n', encoding="utf-8")
+    with pytest.raises(harness.HarnessError, match="ne vise que Windows"):
+        workspace.create_workspace(tmp_path / "ws", "s1", 10, base, [data], cuda=True)
+    assert not (tmp_path / "ws").exists()
 
 
 def test_templates_in_repo_have_no_personal_path():
