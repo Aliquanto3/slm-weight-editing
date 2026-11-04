@@ -29,3 +29,86 @@
     test sur lfm3-20261029 (test_lfm3_campaign_shares_the_flint_settings_with_two_models) et
     l'entrée de qwen3.5:0.8b sur celle de full-20261018. Digest et capacités du modèle édité
     marqués à confirmer par precheck, comme lfm3 ; ne lancer ni ollama, ni precheck, ni generate.
+- id: "3"
+  title: Harnais d'édition à budget de lots fixé avant la séance
+  description: >-
+    Seule voie d'exécution du modèle pour l'agent éditeur : lots d'inférence sur les splits train
+    comptés contre un budget immuable, refus au-delà, journal complet de chaque lot (SPEC CAP-5).
+  spec_checkpoint: false
+  done_checkpoint: false
+  invoke_dev_with: >-
+    Dépôt slm-weight-editing. Moteur transformers sur les safetensors HF, tout sous
+    torch.inference_mode() ; aucun gradient, perte ni optimiseur (un test le vérifie, par ex.
+    requires_grad faux et aucun appel à backward). Génération gloutonne (température 0,
+    do_sample False), max_new_tokens 4096, plafond non modifiable par l'appelant. Budget de 10, 25
+    ou 50 lots écrit à l'ouverture de la séance dans un fichier d'état ; une valeur hors de ces
+    trois ou un changement après ouverture est refusé ; au plus 512 problèmes par lot. Données :
+    splits train de GSM8K et MATH seulement ; refuser tout split autre que train et tout chemin
+    sous heldout/. Journal JSONL par lot : numéro, budget restant, réglages, problèmes, sorties,
+    done_reason, sha256 des tenseurs chargés. Le harnais recharge les poids du répertoire de
+    travail de la séance à chaque lot. Tests sans modèle réel ni téléchargement : petit modèle de
+    config aléatoire construit en mémoire, jeux de données synthétiques ; ne jamais lancer ollama.
+    Données et journaux sous data/ ou models/ (ignorés par git).
+- id: "4"
+  title: Gel de la séance et diff vérifiable de l'édition
+  description: >-
+    Commande de gel qui écrit le diff de l'édition (tenseurs touchés, sha256 avant et après,
+    script d'application, journal) et un checkpoint rejoué depuis l'original, prêt pour
+    report-gguf (SPEC CAP-2, CAP-1).
+  spec_checkpoint: false
+  done_checkpoint: false
+  invoke_dev_with: >-
+    Dépôt slm-weight-editing. Le gel compare les safetensors de travail à l'original (révision
+    figée), liste les tenseurs qui diffèrent et calcule le sha256 des octets bruts avant et après,
+    au format de reference-mit.md. Après le gel, le harnais de la story 3 refuse tout nouveau lot.
+    Le diff publiable ne contient que des valeurs de petite taille (indices et deltas, ou script
+    déterministe) ; jamais un tenseur complet dans le dépôt. Rejouer le diff sur l'original doit
+    redonner les sha256 publiés (test sur tenseurs synthétiques), puis produire un checkpoint
+    accepté par report_gguf.py sans le modifier. Sorties sous models/.
+- id: "5"
+  title: Protocole et garde-fous de la séance d'édition Claude
+  description: >-
+    Réglages Claude Code de séance, consigne de séance et audit de la transcription qui prouvent
+    qu'Opus 5.5 a édité sans web, sans le banc, sans heldout/ ni les journaux du MIT
+    (SPEC CAP-6, préparation).
+  spec_checkpoint: false
+  done_checkpoint: false
+  invoke_dev_with: >-
+    Dépôt slm-weight-editing. Répertoire de séance dédié avec son .claude/settings.json : refuser
+    WebFetch et WebSearch, refuser la lecture de heldout/, du dépôt slm-quality-bench, de
+    lm_understand-logs et du modèle RikiyaT, refuser ollama. Consigne de séance (prompt de départ)
+    : cible, budget, harnais comme seule voie d'exécution du modèle, gel en fin de séance, sans
+    citer l'édition du MIT. Script d'audit qui lit la transcription JSONL de la séance et échoue
+    sur tout accès web, toute lecture d'un chemin interdit ou toute exécution du modèle hors du
+    harnais (chargement transformers ou forward hors de son module) ; testé sur des transcriptions
+    synthétiques. Ne pas lancer la séance : Anaël l'ouvre après la story, une fois la cible
+    confirmée par wsp-20261104 et le poste choisi.
+- id: "6"
+  title: Comparaison chiffrée de deux éditions d'un même modèle
+  description: >-
+    Outil qui compare deux éditions par les tenseurs touchés, le cosinus de leurs directions et
+    leurs scores au banc, et écrit le rapport édition Claude contre édition du MIT (SPEC CAP-7).
+  spec_checkpoint: false
+  done_checkpoint: false
+  invoke_dev_with: >-
+    Dépôt slm-weight-editing. Entrées : deux checkpoints ou deux diffs (story 4) sur le même
+    original, et un ou deux summary.json de slm-quality-bench lus en lecture seule (hors séance
+    seulement). Axes : tenseurs touchés (communs, propres à chacun, nombre de poids), cosinus
+    entre deltas par tenseur commun et entre directions principales (SVD du delta), écart de score
+    et de taux tronqué par catégorie et par piste avec intervalles de confiance. Rapport Markdown
+    sans question ni extrait de réponse du banc. Tests sur tenseurs et summary.json synthétiques ;
+    l'outil se développe avant la séance.
+- id: "7"
+  title: Campagne du lot 1 dans slm-quality-bench
+  description: >-
+    Dans slm-quality-bench, entrée du modèle édité par Claude dans models.yaml et campagne qui
+    mesure l'original, l'édition du MIT et l'édition Claude avec les mêmes réglages (SPEC CAP-4,
+    CAP-7).
+  spec_checkpoint: false
+  done_checkpoint: false
+  invoke_dev_with: >-
+    Dépôt slm-quality-bench, pas slm-weight-editing : mettre main à jour, branche et PR dans ce
+    dépôt. Calquer campagne et test sur wsp-20261104 (réglages et version d'Ollama de cette
+    campagne, 0.40.14). Tag du modèle édité à fixer avec Anaël après la séance ; digest et
+    capacités marqués à confirmer par precheck. Poste : celui où wsp-20261104 a tourné, ou
+    portable-rtx3060 si Anaël le choisit. Ne lancer ni ollama, ni precheck, ni generate.

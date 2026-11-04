@@ -73,12 +73,15 @@ Vision et opportunité : vérifier qu'un LLM éditeur, Claude Opus 5.5 dans Clau
 
 - L'outil de report vit dans ce dépôt (CLI Python) et lit le GGUF officiel par le manifeste local d'Ollama, en lecture seule.
 - Le modèle édité garde la famille `qwen` au registre du banc ; son digest et ses capacités sont à confirmer par `precheck` après `ollama create`, comme pour `lfm3-20261029`.
+- Le harnais exécute le modèle par transformers sur les safetensors HF, sous `torch.inference_mode()`, en décodage glouton plafonné à 4 096 tokens ; pas d'Ollama dans le harnais.
+- « Seule voie d'exécution » : on ne peut pas l'imposer techniquement à un agent qui écrit du Python ; elle repose sur les réglages de la séance et sur un audit de la transcription après coup.
 
 ## Open Questions
 
 - Quel seuil chiffré pour « recule nettement » ?
 - Périmètre de taille : ≤ 2 Md (AGENTS.md) ou ≤ 2,5 Md (cadrage, `qwen3.5:2b` à 2,3 Md en cible n° 2) ?
-- Matériel des séances : tour RTX 3050 ou portable CPU 16 Go ? Par transformers, llama.cpp ou WSL (vLLM ne tourne pas nativement sous Windows) ?
+- Cible de la séance du lot 1 : Qwen3.5-0.8B à confirmer après le résultat de `wsp-20261104` ; si l'édition du MIT n'y fait pas reculer le tronqué, revoir la cible.
+- Matériel des séances : tour RTX 3050, portable `portable-rtx3060` (déclaré au banc pour les petits modèles) ou CPU ?
 - Coût d'une séance Opus 5.5 en effort high : à mesurer au lot 1 avant d'élargir ; Fable 5.1 seulement après deux échecs.
 - Quels défauts autres que les boucles retenir (signature mesurable sur données d'entraînement) ?
 - Fine-tuning Service Public : appliquer l'édition après la fusion du LoRA puis réévaluer (l'ordre inverse risque de réintroduire le défaut) ; à confirmer.
