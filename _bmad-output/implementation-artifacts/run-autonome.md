@@ -70,3 +70,5 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 - 2026-11-04 08:54 · 1.3 · review · passe 2 : 1 medium reporté à 1.5 (copie de work/ hors des séances), 2 low · ea20ab4
 - 2026-11-04 08:54 · 1.3 · CI · verte sur les trois OS · ea20ab4
 - 2026-11-04 08:54 · 1.3 · fusion · #7 fusionnée, MERGED vérifié · 64d6b78
+- 2026-11-04 08:55 · 1.4 · décision · report-gguf reçoit une option qui lit les sha256 attendus dans le diff (CLI limitée aux sha256 du MIT) · —
+- 2026-11-04 08:55 · 1.4 · dev · lancé (dev-story Sonnet, worktree wt-s4, feat/gel-diff-edition) · —
