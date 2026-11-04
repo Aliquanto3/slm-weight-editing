@@ -94,3 +94,5 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 - 2026-11-04 09:25 · 1.5 · dev · reprise lancée (dev-story Opus, même branche) · —
 - 2026-11-04 09:53 · 1.5 · dev · reprise finie, 315 tests verts ; espace hors dépôt, lanceur run-script, audit renforcé · 5a2b88c
 - 2026-11-04 09:53 · 1.5 · second-avis · relancé sur la reprise · —
+- 2026-11-04 10:00 · 1.5 · second-avis · reprise : 2 high (run-batch sur racine et données non bornées, point final NTFS sur les noms protégés), 2 medium, 3 low ; lanceur tenu sur toutes les sondes directes · —
+- 2026-11-04 10:00 · 1.5 · review · passe 1 lancée (Opus) · —
