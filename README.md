@@ -23,9 +23,11 @@ L'outil remplace dans le GGUF officiel de `qwen3.5:0.8b` (Q8_0) les deux tenseur
 1. Anaël télécharge dans `models/`, ignoré par git, le checkpoint édité et sa base (safetensors) ; la base sert à contrôler les originaux des deux tenseurs visés et donne leur sha256 avant édition :
 
    ```
-   hf download RikiyaT/Qwen3.5-0.8B-weight-space-programming --local-dir models/hf/qwen3.5-wsp
-   hf download Qwen/Qwen3.5-0.8B --revision 2fc06364715b967f1860aea9cf38778875588b17 --local-dir models/hf/qwen3.5-base
+   uvx --from huggingface_hub hf download RikiyaT/Qwen3.5-0.8B-weight-space-programming --local-dir models/hf/qwen3.5-wsp
+   uvx --from huggingface_hub hf download Qwen/Qwen3.5-0.8B --revision 2fc06364715b967f1860aea9cf38778875588b17 --local-dir models/hf/qwen3.5-base
    ```
+
+   Depuis le dépôt slm-weight-editing ; `uvx` lance la CLI `hf` sans l'installer (sinon `uv tool install huggingface_hub`).
 
 2. Report, avec `qwen3.5:0.8b` déjà présent dans Ollama (`ollama pull qwen3.5:0.8b` au besoin) :
 
