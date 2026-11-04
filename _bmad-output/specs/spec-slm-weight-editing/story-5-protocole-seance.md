@@ -128,3 +128,12 @@ Base à jour (origin/main 0fc353b ancêtre de HEAD). Second avis (Haiku, sondes 
 - Important · low · second avis n° 6 · corrigé avec n° 1 (`session-status` lié à l'espace).
 - Nit · low · second avis n° 7 · corrigé : tests ajoutés (tableau, lignes R1 à R4).
 - Complexité : 0 constat (`find_workspace` parcourt les parents une fois par commande ; `audit_batches` linéaire).
+
+### Passe 2 (2026-11-04, SHA revu 18535f2)
+
+Relecture de `5a2b88c..18535f2` (base origin/main 0fc353b à jour), sondes exécutées sur un espace temporaire et le vrai parseur.
+
+- Nit · low · revue · corrigé : l'audit ne voyait pas l'abréviation argparse `--sessions X` (préfixe unique de `--sessions-root`) ; le harnais la refusait déjà depuis l'espace. `--sess` et `--da` sont ambigus (refus d'argparse). Test ajouté.
+- Nit · low · revue · reporté : un `notes/Workspace.json` en casse mixte (les deny `Edit(**/workspace.json*)` ne couvrent que minuscules et majuscules) serait pris par `find_workspace` si la commande partait de `notes/` ; il faut un `cd`, signalé par l'audit (`hors-espace-seance` sur le `cd` et le `cwd`, `commande-hors-liste`). Prendre l'espace le plus externe casserait avec un `workspace.json` tiers au-dessus. À vérifier : sensibilité à la casse des règles `Edit` de Claude Code sous Windows et autorisation de `cd` en mode `dontAsk`.
+- Confirmé sans constat : hors de tout espace, le harnais retombe sur le comportement libre et l'audit le refuse (`cwd`, options liées) ; réécriture d'une copie différente non exploitable (`scripts/` de séance interdit en écriture par les deny et le lanceur, liens interdits) ; deny `Edit(**/*~*)` sans gêne (l'éditeur n'écrit par Edit que `notes/`, `scripts/` et `work/*.safetensors`, les scripts ne passent pas par ces règles) ; exemption `<...>` acceptable (imports et ouvertures contrôlés un à un) ; `audit_batches` lit un `data_path` absolu (résolu par le harnais).
+- Complexité : 0 constat.

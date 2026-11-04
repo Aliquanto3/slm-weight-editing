@@ -733,6 +733,8 @@ def test_ntfs_stream_in_write_path_is_flagged():
         "--data data/gsm8k-train.jsonl",
         "session-status --session s1 --sessions-root C:/autre/sessions",
         "run-script scripts/x.py --session s1 --sessions-root=notes/fake",
+        "session-status --session s1 --sessions notes/fake",
+        "run-script scripts/x.py --session s1 --sessions-r=notes/fake",
     ],
 )
 def test_options_outside_workspace_are_flagged(args):

@@ -457,6 +457,8 @@ def _check_options(part: str, ctx: Context) -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
     for i, token in enumerate(tokens):
         option, eq, value = token.partition("=")
+        if option.startswith("--sessions") and "--sessions-root".startswith(option):
+            option = "--sessions-root"  # abréviation acceptée par argparse (`--sessions`)
         if option not in _BOUND_OPTIONS:
             continue
         if not eq:
