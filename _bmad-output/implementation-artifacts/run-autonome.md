@@ -88,3 +88,5 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 - 2026-11-04 09:19 · 1.5 · dev · fini, 240 tests verts (73 cas de violation), merge de main 0fc353b · d075517
 - 2026-11-04 09:19 · 1.5 · second-avis · lancé, avec vérification de la syntaxe des permissions dans la doc officielle · —
 - 2026-11-04 09:20 · 1.5 · second-avis · syntaxe des permissions vérifiée (doc officielle) : // et Read/Grep/Glob, PowerShell(...), claudeMdExcludes confirmés ; Task sans effet ; disableAutoMode à ajouter · —
+- 2026-11-04 09:23 · 1.5 · second-avis · 4 high (lecture par chemin absolu, échappements, script lancé non audité, PYTHONPATH), 5 medium, 2 low · —
+- 2026-11-04 09:23 · 1.5 · décision · audit textuel insuffisant seul : vérification d'un mode liste blanche et d'un lanceur de scripts à garde-fous d'exécution avant la revue · —
