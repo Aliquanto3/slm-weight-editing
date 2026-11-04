@@ -47,6 +47,9 @@ def _parser() -> argparse.ArgumentParser:
 
     add_parser(sub)
     harness.add_parser(sub)
+    from slm_weight_editing import audit_transcript
+
+    audit_transcript.add_parser(sub)
     return parser
 
 

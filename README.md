@@ -88,3 +88,15 @@ Le harnais est la seule voie d'exécution du modèle pour l'agent éditeur (prot
 3. Données : un fichier JSONL local par split train, une ligne par problème, `{"id": "...", "question": "..."}` (GSM8K) ou `{"id": "...", "problem": "..."}` (MATH) ; avec `"split": "train"` obligatoire sur chaque ligne (une ligne sans `split` est refusée) ; les autres champs sont ignorés. Aucun téléchargement par le harnais.
 
 4. Journal : `models/sessions/s1/journal.jsonl`, une ligne `open` (sha256 des tenseurs et fichiers de la base), puis par lot une ligne `reserve` écrite avant la génération (le lot est décompté même si la génération plante) et une ligne `batch` (numéro, budget restant, réglages, problèmes, sorties avec `done_reason` `stop` ou `length`, sha256 des tenseurs, des autres fichiers de `work/` et du fichier de données). Le checkpoint de base ne peut pas venir d'une séance, et un identifiant déjà ouvert (registre `models/sessions/registry.jsonl`) ne se rouvre pas, même après suppression de son dossier.
+
+## Préparer et auditer une séance
+
+1. Anaël ouvre la séance (`session-open`), copie `session/` tel quel et remplace `<ID_SEANCE>` et `<BUDGET>` dans `session/CONSIGNE.md` et `session/CLAUDE.md` (copie locale, non commitée).
+2. Lancement depuis `session/`, sans serveur MCP : `claude --strict-mcp-config`. Avant le premier message, vérifier `/permissions` (règles `deny` de `session/.claude/settings.json`) et `/memory` (seul `session/CLAUDE.md` chargé). Premier message : « Lis CONSIGNE.md et suis-la. »
+3. Après le gel par Anaël, audit de la transcription (`~/.claude/projects/<projet de session/>/<id>.jsonl`, sous-agents compris) :
+
+   ```
+   uv run slm-weight-editing audit-session <transcription>.jsonl --workspace session --session-dir models/sessions/s1 --reference-from <checkpoint de la révision publiée> --base-revision <révision> --write-reference models/sessions/s1-reference.json
+   ```
+
+   Code 0 : aucune violation ; code 1 : violations, une par ligne (`fichier:ligne · règle · outil · détail`) ; code 2 : entrée illisible. L'audit est textuel et large (faux positifs à relire à la main) ; règles et limites : `_bmad-output/specs/spec-slm-weight-editing/story-5-protocole-seance.md`.
