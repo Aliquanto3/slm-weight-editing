@@ -46,3 +46,5 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 - 2026-11-04 08:34 · spec · PR · #5 ouverte (stories 3 à 7) · —
 - 2026-11-04 08:35 · spec · fusion · #5 fusionnée, MERGED vérifié · 5ec3233
 - 2026-11-04 08:35 · run · décision · cadrage dans les prompts, contrats CLI, deps et état de séance fixés · —
+- 2026-11-04 08:36 · 3 · dev · lancé (dev-story Opus, worktree wt-s3, feat/harnais-budget) · —
+- 2026-11-04 08:36 · 6 · dev · lancé (dev-story Sonnet, worktree wt-s6, feat/comparaison-editions) · —
