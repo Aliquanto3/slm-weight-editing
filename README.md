@@ -63,3 +63,28 @@ uv run slm-weight-editing compare-edits --original <orig> --edit-a <edition-a> -
 ```
 
 Les checkpoints sont des fichiers ou dossiers safetensors du même original (mêmes noms, formes et dtypes, sinon erreur et code 1). Le rapport Markdown et un JSON des chiffres (même nom, extension `.json`) donnent les tenseurs touchés (communs, propres à chacun, nombre et part des poids modifiés), le cosinus des deltas et celui de leurs directions principales (SVD, valeur absolue ; n/a pour un tenseur 1-D comme un biais ou une norme). Avec un ou deux `summary.json` de `slm-quality-bench`, il ajoute l'écart de score et de taux tronqué par piste et par catégorie, avec un intervalle à 95 % (Wilson, puis Newcombe pour l'écart, modèles traités comme indépendants). Un seul résumé contenant les deux modèles se sélectionne par `--tag-a` et `--tag-b`. Une piste ou catégorie présente dans un seul résumé est listée « absente de A » (ou de B). Le rapport ne reprend ni question, ni réponse, ni chemin.
+
+## Séance d'édition : harnais à budget de lots
+
+Le harnais est la seule voie d'exécution du modèle pour l'agent éditeur (protocole dans `AGENTS.md`).
+
+1. Ouverture, budget de 10, 25 ou 50 lots fixé une fois pour toutes :
+
+   ```
+   uv run slm-weight-editing session-open --session s1 --budget 25 --base-checkpoint models/hf/qwen3.5-base --base-revision 2fc06364715b967f1860aea9cf38778875588b17
+   ```
+
+   La séance vit dans `models/sessions/s1/` : `state.json` (budget, lots consommés, gel, base), `work/` (copie du checkpoint que l'agent modifie) et `journal.jsonl`. Une réouverture ou un budget hors de 10, 25 et 50 est refusé.
+
+2. Lot d'inférence, compté contre le budget :
+
+   ```
+   uv run slm-weight-editing run-batch --session s1 --dataset gsm8k --split train --data data/gsm8k/train.jsonl --start 0 --count 64
+   uv run slm-weight-editing session-status --session s1
+   ```
+
+   Au plus 512 problèmes par lot. Génération gloutonne, `max_new_tokens` 4096 (non réglable), sous `torch.inference_mode()`, poids rechargés depuis `work/` à chaque lot. Refus (code 2) : budget épuisé, séance gelée, jeu autre que `gsm8k` ou `math`, split autre que `train`, chemin sous `heldout/` (même par `..` ou lien), nom de fichier sans « train ».
+
+3. Données : un fichier JSONL local par split train, une ligne par problème, `{"id": "...", "question": "..."}` (GSM8K) ou `{"id": "...", "problem": "..."}` (MATH) ; les autres champs sont ignorés, sauf `split`, qui doit valoir `train`. Aucun téléchargement par le harnais.
+
+4. Journal : `models/sessions/s1/journal.jsonl`, une ligne `open`, puis une ligne `batch` par lot (numéro, budget restant, réglages, problèmes, sorties avec `done_reason` `stop` ou `length`, sha256 des tenseurs chargés et du fichier de données).
