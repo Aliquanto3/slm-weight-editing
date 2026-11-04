@@ -233,7 +233,14 @@ def report_gguf(
     expected_sha256: dict[str, str] | None = None,
     intermediate: str = "f32",
     command: str | None = None,
+    provenance: dict | None = None,
 ) -> ReportResult:
+    """`provenance` ({"base": {...}, "edit": {...}}) décrit l'édition dans diff.json.
+
+    Sans elle, l'édition est celle du MIT si `expected_sha256` est omis (valeurs par défaut) ;
+    avec des sha256 fournis sans provenance (ex. une séance), base et dépôt restent inconnus
+    (null) : le diff ne prétend jamais que l'édition est celle du MIT.
+    """
     out = Path(out_dir)
     stem = tag.replace(":", "-").replace("/", "-")
     paths = ReportResult(
@@ -252,6 +259,7 @@ def report_gguf(
             expected_sha256=expected_sha256,
             intermediate=intermediate,
             command=command,
+            provenance=provenance,
         )
     except BaseException:
         # Un échec ne laisse aucune sortie d'une séance précédente : `ollama create` ne doit pas
@@ -276,8 +284,17 @@ def _report(
     expected_sha256: dict[str, str] | None,
     intermediate: str,
     command: str | None,
+    provenance: dict | None,
 ) -> ReportResult:
     expected = WSP_EDITED_SHA256 if expected_sha256 is None else expected_sha256
+    if provenance is None:
+        if expected_sha256 is None:
+            provenance = {
+                "base": {"repo": WSP_BASE_REPO, "revision": WSP_BASE_REVISION},
+                "edit": {"repo": WSP_EDIT_REPO},
+            }
+        else:
+            provenance = {"base": {"repo": None, "revision": None}, "edit": {"repo": None}}
     official = load_model(model, store)
     gguf = read_gguf(official.model_blob)
     # Blob officiel vérifié d'abord : corrompu, il ferait échouer à tort le contrôle de fidélité.
@@ -370,8 +387,8 @@ def _report(
         "format": DIFF_FORMAT,
         "tag": tag,
         "source_model": model,
-        "base": {"repo": WSP_BASE_REPO, "revision": WSP_BASE_REVISION},
-        "edit": {"repo": WSP_EDIT_REPO},
+        "base": provenance["base"],
+        "edit": provenance["edit"],
         "intermediate": intermediate,
         "tensors": entries,
         "gguf": {

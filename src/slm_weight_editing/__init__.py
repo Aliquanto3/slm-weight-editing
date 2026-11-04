@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import shlex
 import sys
+from pathlib import Path
 
 __version__ = "0.0.0"
 
@@ -32,7 +33,13 @@ def _parser() -> argparse.ArgumentParser:
         help="checkpoint de base : contrôle de fidélité des originaux visés (CAP-1), sha256 avant",
     )
     rep.add_argument("--model", default=WSP_SOURCE_MODEL, help="modèle Ollama officiel")
-    rep.add_argument("--tag", default=WSP_TAG, help="tag du modèle édité")
+    rep.add_argument(
+        "--tag", help=f"tag du modèle édité (défaut {WSP_TAG} ; obligatoire avec --edit-diff)"
+    )
+    rep.add_argument(
+        "--edit-diff",
+        help="diff.json d'une séance gelée : ses sha256 après remplacent ceux de l'édition du MIT",
+    )
     rep.add_argument(
         "--ollama-models", help="magasin d'Ollama (sinon OLLAMA_MODELS, sinon ~/.ollama/models)"
     )
@@ -43,9 +50,10 @@ def _parser() -> argparse.ArgumentParser:
         default="f32",
         help="passage bf16 -> fXX avant Q8_0 (défaut f32, comme llama.cpp)",
     )
-    from slm_weight_editing.compare_edits import add_parser
+    from slm_weight_editing import compare_edits, freeze
 
-    add_parser(sub)
+    compare_edits.add_parser(sub)
+    freeze.add_parser(sub)
     harness.add_parser(sub)
     return parser
 
@@ -61,9 +69,41 @@ def main(argv: list[str] | None = None) -> int:
         return args.func(args)
     from slm_weight_editing.gguf_file import GGUFError
     from slm_weight_editing.ollama_store import OllamaStoreError
-    from slm_weight_editing.report_gguf import FidelityError, ReportError, report_gguf
+    from slm_weight_editing.report_gguf import (
+        WSP_TAG,
+        FidelityError,
+        ReportError,
+        report_gguf,
+    )
     from slm_weight_editing.safetensors_file import SafetensorsError
 
+    expected, provenance = None, None
+    if args.edit_diff:
+        from slm_weight_editing.freeze import DiffError, load_diff
+        from slm_weight_editing.report_gguf import sha256_file
+
+        if not args.tag:
+            print("Erreur : --edit-diff demande --tag (pas de tag du MIT)", file=sys.stderr)
+            return 1
+        try:
+            meta, _ = load_diff(args.edit_diff)
+            expected = {t["name"]: t["sha256_after"] for t in meta["tensors"]}
+        except (DiffError, KeyError, TypeError) as exc:
+            print(f"Erreur : diff invalide ({exc})", file=sys.stderr)
+            return 1
+        if not expected:
+            print("Erreur : le diff ne modifie aucun tenseur", file=sys.stderr)
+            return 1
+        provenance = {
+            "base": {"repo": None, "revision": meta.get("base_revision")},
+            "edit": {
+                "repo": None,
+                "session_id": meta.get("session_id"),
+                "diff_sha256": sha256_file(Path(args.edit_diff)),
+                "journal_sha256": meta.get("journal", {}).get("sha256"),
+            },
+        }
+    args.tag = args.tag or WSP_TAG
     out = args.out or default_out_dir(args.tag)
     try:
         result = report_gguf(
@@ -73,6 +113,8 @@ def main(argv: list[str] | None = None) -> int:
             tag=args.tag,
             store=args.ollama_models,
             base_checkpoint=args.base_checkpoint,
+            expected_sha256=expected,
+            provenance=provenance,
             intermediate=args.intermediate,
             command="uv run slm-weight-editing " + shlex.join(argv),
         )
