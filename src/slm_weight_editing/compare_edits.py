@@ -37,17 +37,21 @@ class CompareError(ValueError):
     """Entrées incompatibles ou illisibles."""
 
 
-def load_f64(st: SafeTensor) -> np.ndarray:
-    """Tenseur safetensors (BF16, F16, F32, F64) en float64, à sa forme."""
-    data = st.read_bytes()
-    if st.dtype == "BF16":
+def bytes_to_f64(data: bytes, dtype: str, shape: tuple[int, ...], name: str) -> np.ndarray:
+    """Octets bruts (BF16, F16, F32, F64) en float64, à la forme donnée."""
+    if dtype == "BF16":
         u32 = np.frombuffer(data, dtype="<u2").astype(np.uint32) << 16
         arr = u32.view(np.float32)
-    elif st.dtype in _NUMERIC:
-        arr = np.frombuffer(data, dtype=_NUMERIC[st.dtype])
+    elif dtype in _NUMERIC:
+        arr = np.frombuffer(data, dtype=_NUMERIC[dtype])
     else:
-        raise CompareError(f"{st.name} : dtype {st.dtype} non géré")
-    return arr.astype(np.float64).reshape(st.shape)
+        raise CompareError(f"{name} : dtype {dtype} non géré")
+    return arr.astype(np.float64).reshape(shape)
+
+
+def load_f64(st: SafeTensor) -> np.ndarray:
+    """Tenseur safetensors (BF16, F16, F32, F64) en float64, à sa forme."""
+    return bytes_to_f64(st.read_bytes(), st.dtype, st.shape, st.name)
 
 
 def _check_same(original: dict[str, SafeTensor], edit: dict[str, SafeTensor], label: str) -> None:
@@ -161,11 +165,25 @@ def compare_deltas(
     }
 
 
-def compare_checkpoints(original, edit_a, edit_b) -> dict:
+def _side_deltas(ref, edit, diff, label: str) -> dict[str, np.ndarray]:
+    """Deltas d'un côté : checkpoint édité, ou diff de séance rejoué en mémoire."""
+    if (edit is None) == (diff is None):
+        raise CompareError(f"{label} : un checkpoint édité ou un diff, pas les deux ni aucun")
+    if diff is None:
+        return deltas_from_checkpoints(ref, open_checkpoint(edit), label)
+    from slm_weight_editing.freeze import DiffError, diff_deltas
+
+    try:
+        return diff_deltas(diff, ref)
+    except DiffError as exc:
+        raise CompareError(f"{label} : {exc}") from exc
+
+
+def compare_checkpoints(original, edit_a, edit_b, diff_a=None, diff_b=None) -> dict:
     ref = open_checkpoint(original)
     total = sum(math.prod(t.shape) for t in ref.values())
-    da = deltas_from_checkpoints(ref, open_checkpoint(edit_a), "édition A")
-    db = deltas_from_checkpoints(ref, open_checkpoint(edit_b), "édition B")
+    da = _side_deltas(ref, edit_a, diff_a, "édition A")
+    db = _side_deltas(ref, edit_b, diff_b, "édition B")
     return compare_deltas(da, db, total)
 
 
@@ -374,6 +392,8 @@ def compare(
     tags=(None, None),
     label_a="A",
     label_b="B",
+    diff_a=None,
+    diff_b=None,
 ) -> tuple[dict, str]:
     if len(summaries) > 2:
         raise CompareError("au plus deux summary.json")
@@ -383,7 +403,7 @@ def compare(
         raise CompareError("un seul summary.json : --tag-a et --tag-b distincts requis")
     result: dict = {
         "labels": {"a": label_a, "b": label_b},
-        "weights": compare_checkpoints(original, edit_a, edit_b),
+        "weights": compare_checkpoints(original, edit_a, edit_b, diff_a, diff_b),
         "bench": None,
     }
     if summaries:
@@ -411,8 +431,10 @@ def add_parser(sub) -> None:
         description="Rapport Markdown et JSON : tenseurs touchés, cosinus des deltas, écarts.",
     )
     p.add_argument("--original", required=True, help="checkpoint original (fichier ou dossier)")
-    p.add_argument("--edit-a", required=True, help="checkpoint de l'édition A")
-    p.add_argument("--edit-b", required=True, help="checkpoint de l'édition B")
+    p.add_argument("--edit-a", help="checkpoint de l'édition A (ou --diff-a)")
+    p.add_argument("--edit-b", help="checkpoint de l'édition B (ou --diff-b)")
+    p.add_argument("--diff-a", help="diff.json de séance rejoué en mémoire, à la place de --edit-a")
+    p.add_argument("--diff-b", help="diff.json de séance rejoué en mémoire, à la place de --edit-b")
     p.add_argument("--label-a", default="A", help="nom de l'édition A dans le rapport")
     p.add_argument("--label-b", default="B", help="nom de l'édition B dans le rapport")
     p.add_argument(
@@ -436,6 +458,8 @@ def run(args: argparse.Namespace) -> int:
             tags=(args.tag_a, args.tag_b),
             label_a=args.label_a,
             label_b=args.label_b,
+            diff_a=args.diff_a,
+            diff_b=args.diff_b,
         )
         md_path, js_path = write_report(result, md, args.out)
     except (CompareError, SafetensorsError, OSError) as exc:
