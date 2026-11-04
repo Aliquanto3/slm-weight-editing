@@ -102,3 +102,5 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 - 2026-11-04 10:14 · 1.5 · review · passe 2 : 0 Important, 1 low corrigé (abréviation argparse), 1 low reporté (Workspace.json en casse mixte, à vérifier par Anaël) · 697e5ba
 - 2026-11-04 10:14 · 1.5 · CI · verte sur les trois OS · 697e5ba
 - 2026-11-04 10:14 · 1.5 · fusion · #9 fusionnée, MERGED vérifié · c9496a5
+- 2026-11-04 10:16 · run · CI · main verte sur les trois OS après la dernière fusion · c9496a5
+- 2026-11-04 10:16 · run · ménage · worktrees et branches locales fusionnées retirés ; branches distantes soumises à Anaël · c9496a5
