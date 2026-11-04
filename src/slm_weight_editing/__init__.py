@@ -94,6 +94,15 @@ def main(argv: list[str] | None = None) -> int:
         if not expected:
             print("Erreur : le diff ne modifie aucun tenseur", file=sys.stderr)
             return 1
+        if meta["files_changed"]:
+            names = ", ".join(str(f.get("path")) for f in meta["files_changed"][:3])
+            print(
+                f"Erreur : la séance a aussi modifié des fichiers hors tenseurs ({names}) ; "
+                "ni apply-diff ni report-gguf ne les rejouent, le GGUF ne serait donc pas "
+                "l'édition gelée : report refusé",
+                file=sys.stderr,
+            )
+            return 1
         provenance = {
             "base": {"repo": None, "revision": meta.get("base_revision")},
             "edit": {

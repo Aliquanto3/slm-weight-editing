@@ -4,21 +4,27 @@
 - `diff.json` : métadonnées et sha256 (format FORMAT) ;
 - `diff.bin` : pour chaque tenseur modifié, les indices plats des éléments changés (u4 ou u8
   petit-boutiste) puis leurs valeurs après édition, en octets bruts du dtype d'origine ;
-- `journal.jsonl` : copie du journal au moment du gel, dont le sha256 figure dans `diff.json`.
-Il pose `frozen` (définitif : le harnais refuse ensuite tout lot) et ajoute un événement `freeze`.
+- `journal.jsonl` : version publique du journal au moment du gel (chemins locaux masqués par
+  `public_path`), dont le sha256 figure dans `diff.json` ; le journal brut reste dans la séance.
+Tout le gel se fait sous le verrou de séance du harnais. Il pose `frozen` (définitif : le
+harnais refuse ensuite tout lot) et ajoute un événement `freeze`.
 
 `apply-diff` rejoue le diff sur l'original : le checkpoint produit redonne exactement les sha256
 publiés (vérifiés avant écriture, refus sinon) ; les autres fichiers de l'original sont recopiés.
 
 Plafond : un tenseur dont plus de MAX_CHANGED_SHARE des éléments changent est refusé, car son
-diff reviendrait à publier le tenseur complet.
+diff reviendrait à publier le tenseur complet (décision du 2026-11-04 : éditions creuses
+imposées par la consigne de séance). Un tenseur de 9 éléments ou moins ne peut donc changer
+d'aucun élément.
 """
 
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
 import json
+import math
 import os
 import shutil
 import sys
@@ -28,16 +34,19 @@ from pathlib import Path
 import numpy as np
 
 from slm_weight_editing import harness
-from slm_weight_editing.harness import HarnessError
+from slm_weight_editing.harness import MAX_CHANGED_SHARE, HarnessError
+from slm_weight_editing.report_gguf import public_text
 from slm_weight_editing.safetensors_file import SafeTensor, SafetensorsError, open_checkpoint
 
 FORMAT = "slm-weight-editing/edit-diff-v1"
-MAX_CHANGED_SHARE = 0.10
 DIFF_FILE = "diff.json"
 VALUES_FILE = "diff.bin"
 FREEZE_DIR = "freeze"
 _FREEZE_RETRIES = 20
 _FREEZE_DELAY = 0.5
+_INDEX_DTYPES = {"u4": 4, "u8": 8}
+# Champs du journal qui portent un chemin local (open : base, batch : fichier de données).
+_PATH_FIELDS = ("base_checkpoint", "data_path")
 # Largeur en octets de chaque dtype safetensors (comparaison bit à bit via un entier non signé).
 _WIDTH = {
     "BOOL": 1, "U8": 1, "I8": 1, "F8_E4M3": 1, "F8_E5M2": 1,
@@ -146,6 +155,34 @@ def _pack_values(parts: list[tuple[dict, np.ndarray, np.ndarray]]) -> tuple[list
     return entries, b"".join(chunks)
 
 
+def public_path(value: str) -> str:
+    """Chemin publiable : relatif au dossier courant s'il est dessous, sinon `.../<nom>`.
+
+    Le contenu reste identifié par les sha256 du journal ; seul l'emplacement local disparaît.
+    """
+    path = Path(value)
+    if not path.is_absolute():
+        return public_text(path.as_posix())
+    try:
+        return path.relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError:
+        return f".../{path.name}"
+
+
+def public_journal(raw: bytes) -> bytes:
+    """Journal publiable : chemins locaux masqués, dossier personnel remplacé par `~`."""
+    lines = []
+    for line in raw.decode("utf-8").splitlines():
+        if not line.strip():
+            continue
+        entry = json.loads(line)
+        for key in _PATH_FIELDS:
+            if isinstance(entry.get(key), str):
+                entry[key] = public_path(entry[key])
+        lines.append(public_text(json.dumps(entry, ensure_ascii=False)) + "\n")
+    return "".join(lines).encode("utf-8")
+
+
 def freeze_session(
     session_id: str,
     original: str | Path,
@@ -153,16 +190,39 @@ def freeze_session(
     sessions_root: str | Path = harness.DEFAULT_SESSIONS_ROOT,
     out: str | Path | None = None,
 ) -> dict:
-    """Gèle la séance et écrit le diff ; renvoie le contenu de diff.json."""
+    """Gèle la séance et écrit le diff ; renvoie le contenu de diff.json.
+
+    Tout se passe sous le verrou de séance (réessai borné si un lot tourne) : deux gels
+    concurrents ne peuvent écrire ni deux diffs ni deux événements freeze.
+    """
     directory = harness.session_dir(session_id, sessions_root)
     harness.read_state(directory)
+    for attempt in range(_FREEZE_RETRIES):
+        lock = harness._session_lock(directory)
+        try:
+            lock.__enter__()
+        except HarnessError as exc:
+            if attempt == _FREEZE_RETRIES - 1:
+                raise FreezeError(
+                    f"un lot tourne encore après {_FREEZE_RETRIES} essais ; gel non posé "
+                    f"(attendre la fin du lot, ou supprimer {harness.LOCK_FILE} s'il est périmé)"
+                ) from exc
+            time.sleep(_FREEZE_DELAY)
+            continue
+        try:
+            return _freeze_locked(directory, session_id, Path(original), out)
+        finally:
+            lock.__exit__(None, None, None)
+    raise AssertionError("inaccessible")
+
+
+def _freeze_locked(directory: Path, session_id: str, original: Path, out) -> dict:
     journal = harness.read_journal(directory)
     if any(e.get("event") == "freeze" for e in journal):
         raise FreezeError(f"séance {session_id} déjà gelée : diff déjà produit")
     opened = next((e for e in journal if e.get("event") == "open"), None)
     if opened is None:
         raise FreezeError("journal sans ligne open")
-    original = Path(original)
     if not original.is_dir():
         raise FreezeError(f"original introuvable : {original}")
     out_dir = Path(out) if out else directory / FREEZE_DIR
@@ -185,35 +245,39 @@ def freeze_session(
     work_files = harness.work_file_hashes(work)
     files = changed_files(opened["base_files_sha256"], work_files)
 
-    # 3. Gel (sous le verrou du harnais, réessai borné si un lot tourne), puis work/ doit être
-    # resté identique à ce qui a été comparé.
+    # 3. Gel (verrou déjà tenu : aucun lot ne peut démarrer), puis work/ doit être resté
+    # identique à ce qui a été comparé (l'éditeur écrit work/ sans passer par le verrou).
     _freeze_state(directory)
+    resume = "séance déjà gelée, relancer session-freeze pour écrire le diff"
     expected = dict(want) | {e["name"]: e["sha256_after"] for e, _, _ in parts}
     if harness.tensor_hashes(work) != expected or harness.work_file_hashes(work) != work_files:
-        raise FreezeError("work/ a changé pendant le gel ; relancer session-freeze")
+        raise FreezeError(f"work/ a changé pendant le gel ; {resume}")
 
-    entries, values = _pack_values(parts)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    journal_path = directory / harness.JOURNAL_FILE
-    journal_sha = harness._sha256_file(journal_path)
-    shutil.copyfile(journal_path, out_dir / harness.JOURNAL_FILE)
-    state = harness.read_state(directory)
-    diff = {
-        "format": FORMAT,
-        "session_id": session_id,
-        "base_revision": state.base_revision,
-        "budget": state.budget,
-        "batches_used": harness.used_batches(directory, state),
-        "journal": {"file": harness.JOURNAL_FILE, "sha256": journal_sha},
-        "max_changed_share": MAX_CHANGED_SHARE,
-        "values_file": {"name": VALUES_FILE, "sha256": _sha(values), "bytes": len(values)},
-        "tensors": entries,
-        "files_changed": files,
-        "frozen_at": state.updated_at,
-    }
-    text = (json.dumps(diff, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
-    _write_atomic(out_dir / VALUES_FILE, values)
-    _write_atomic(out_dir / DIFF_FILE, text)
+    try:
+        entries, values = _pack_values(parts)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        public = public_journal((directory / harness.JOURNAL_FILE).read_bytes())
+        journal_sha = _sha(public)
+        state = harness.read_state(directory)
+        diff = {
+            "format": FORMAT,
+            "session_id": session_id,
+            "base_revision": state.base_revision,
+            "budget": state.budget,
+            "batches_used": harness.used_batches(directory, state),
+            "journal": {"file": harness.JOURNAL_FILE, "sha256": journal_sha},
+            "max_changed_share": MAX_CHANGED_SHARE,
+            "values_file": {"name": VALUES_FILE, "sha256": _sha(values), "bytes": len(values)},
+            "tensors": entries,
+            "files_changed": files,
+            "frozen_at": state.updated_at,
+        }
+        text = (json.dumps(diff, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+        _write_atomic(out_dir / harness.JOURNAL_FILE, public)
+        _write_atomic(out_dir / VALUES_FILE, values)
+        _write_atomic(out_dir / DIFF_FILE, text)
+    except (OSError, ValueError, HarnessError) as exc:
+        raise FreezeError(f"écriture du diff impossible ({exc}) ; {resume}", 1) from exc
     harness._append_journal(
         directory,
         {
@@ -230,19 +294,11 @@ def freeze_session(
 
 
 def _freeze_state(directory: Path) -> None:
-    for attempt in range(_FREEZE_RETRIES):
-        try:
-            harness.update_state(directory, frozen=True)
-            return
-        except HarnessError as exc:
-            if not (directory / harness.LOCK_FILE).exists():
-                raise
-            if attempt == _FREEZE_RETRIES - 1:
-                raise FreezeError(
-                    f"un lot tourne encore après {_FREEZE_RETRIES} essais ; gel non posé "
-                    f"(attendre la fin du lot, ou supprimer {harness.LOCK_FILE} s'il est périmé)"
-                ) from exc
-            time.sleep(_FREEZE_DELAY)
+    """Pose `frozen` ; l'appelant tient déjà le verrou de séance."""
+    state = harness.read_state(directory)
+    if not state.frozen:
+        new = dataclasses.replace(state, frozen=True, updated_at=harness._now())
+        harness._write_state(directory, new)
 
 
 # --- Rejeu ------------------------------------------------------------------------------------
@@ -268,19 +324,56 @@ def load_diff(path: str | Path) -> tuple[dict, bytes]:
         raise DiffError(f"fichier de valeurs illisible : {exc}") from exc
     if _sha(values) != vf.get("sha256") or len(values) != vf.get("bytes"):
         raise DiffError(f"{vf['name']} : sha256 différent de celui du diff (fichier altéré)")
+    files = meta.get("files_changed")
+    if (
+        not isinstance(meta["tensors"], list)
+        or not isinstance(files, list)
+        or not all(isinstance(f, dict) and isinstance(f.get("path"), str) for f in files)
+    ):
+        raise DiffError(f"{path} : diff invalide (tensors ou files_changed mal formés)")
+    for entry in meta["tensors"]:
+        _check_entry(entry, len(values))
     return meta, values
 
 
+def _is_int(value: object) -> bool:
+    return type(value) is int and value >= 0
+
+
+def _check_entry(entry: object, size: int) -> None:
+    """Structure d'une entrée : types, numel = produit de la forme, plages dans diff.bin."""
+    name = entry.get("name") if isinstance(entry, dict) else None
+    if not isinstance(name, str):
+        raise DiffError(f"entrée de diff invalide : {entry!r:.80}")
+    shape, numel, n = entry.get("shape"), entry.get("numel"), entry.get("changed")
+    if not isinstance(shape, list) or not all(_is_int(d) for d in shape):
+        raise DiffError(f"{name} : forme invalide dans le diff")
+    if not _is_int(numel) or numel != math.prod(shape) or not _is_int(n) or n > numel:
+        raise DiffError(f"{name} : numel ou changed incohérents avec la forme")
+    if entry.get("index_dtype") not in _INDEX_DTYPES or entry.get("dtype") not in _WIDTH:
+        raise DiffError(f"{name} : index_dtype ou dtype non géré")
+    if entry["index_dtype"] == "u4" and numel > 2**32:
+        raise DiffError(f"{name} : index_dtype u4 trop étroit pour {numel} éléments")
+    for key, width in (
+        ("indices_offset", _INDEX_DTYPES[entry["index_dtype"]]),
+        ("values_offset", _WIDTH[entry["dtype"]]),
+    ):
+        offset = entry.get(key)
+        if not _is_int(offset) or offset + n * width > size:
+            raise DiffError(f"{name} : {key} hors de {VALUES_FILE}")
+    for key in ("sha256_before", "sha256_after"):
+        if not isinstance(entry.get(key), str):
+            raise DiffError(f"{name} : {key} absent du diff")
+
+
 def _entry_arrays(entry: dict, values: bytes) -> tuple[np.ndarray, np.ndarray]:
-    try:
-        n = entry["changed"]
-        idx_t = np.dtype("<" + entry["index_dtype"])
-        val_t = _uint(entry["dtype"], entry["name"])
-        idx = np.frombuffer(values, idx_t, n, entry["indices_offset"])
-        vals = np.frombuffer(values, val_t, n, entry["values_offset"])
-    except (KeyError, TypeError, ValueError, FreezeError) as exc:
-        raise DiffError(f"entrée de diff invalide : {entry.get('name')!r} ({exc})") from exc
-    if n and int(idx.max()) >= entry["numel"]:
+    """Indices et valeurs d'une entrée validée par `_check_entry`."""
+    n = entry["changed"]
+    idx = np.frombuffer(values, "<" + entry["index_dtype"], n, entry["indices_offset"])
+    vals = np.frombuffer(values, _uint(entry["dtype"], entry["name"]), n, entry["values_offset"])
+    if n > 1 and not bool(np.all(idx[1:] > idx[:-1])):
+        raise DiffError(f"{entry['name']} : indices non triés ou en double")
+    if n and int(idx[-1]) >= entry["numel"]:
         raise DiffError(f"{entry['name']} : indice hors du tenseur")
     return idx, vals
 

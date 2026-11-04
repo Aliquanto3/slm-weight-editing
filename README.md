@@ -89,6 +89,8 @@ Le harnais est la seule voie d'exécution du modèle pour l'agent éditeur (prot
 
 4. Journal : `models/sessions/s1/journal.jsonl`, une ligne `open` (sha256 des tenseurs et fichiers de la base), puis par lot une ligne `reserve` écrite avant la génération (le lot est décompté même si la génération plante) et une ligne `batch` (numéro, budget restant, réglages, problèmes, sorties avec `done_reason` `stop` ou `length`, sha256 des tenseurs, des autres fichiers de `work/` et du fichier de données). Le checkpoint de base ne peut pas venir d'une séance, et un identifiant déjà ouvert (registre `models/sessions/registry.jsonl`) ne se rouvre pas, même après suppression de son dossier.
 
+5. Plafond d'édition : au gel, un tenseur dont plus de 10 % des éléments changent est refusé (décision du 2026-11-04 : la consigne de séance impose des éditions creuses ; une projection de rang 1 sur une matrice entière ne passe pas, un tenseur de 9 éléments ou moins ne peut changer d'aucun élément). `session-open` et `session-status` le rappellent.
+
 ## Geler une séance et publier le diff
 
 1. Gel : pose `frozen` (définitif, le harnais refuse ensuite tout lot), compare `work/` à l'original de la séance (ses sha256 doivent égaler ceux de la ligne `open` du journal, sinon refus sans rien écrire) et écrit dans `models/sessions/s1/freeze/` :
@@ -99,9 +101,9 @@ Le harnais est la seule voie d'exécution du modèle pour l'agent éditeur (prot
 
    - `diff.json` (format `slm-weight-editing/edit-diff-v1`) : identifiant de séance, révision de base, budget et lots utilisés, sha256 du journal, sha256 du fichier de valeurs et, par tenseur modifié, nom, forme, dtype, nombre d'éléments et d'éléments changés, sha256 des octets bruts avant et après ; plus la liste des fichiers non safetensors de `work/` qui diffèrent de la base (signalés, non rejoués) ;
    - `diff.bin` : par tenseur, les indices plats des éléments changés (u4 ou u8) puis leurs valeurs après édition en octets bruts du dtype d'origine (rejeu bit à bit, aucun arrondi) ;
-   - `journal.jsonl` : copie du journal au gel ; le journal de la séance reçoit un événement `freeze`.
+   - `journal.jsonl` : version publique du journal au gel, dont le sha256 figure dans `diff.json` (chemins locaux réécrits : relatifs au dossier courant s'ils sont dessous, sinon `.../<nom>` ; dossier personnel remplacé par `~`) ; le journal brut reste dans la séance, non publié, et reçoit un événement `freeze`.
 
-   Plafond : un tenseur dont plus de 10 % des éléments changent est refusé (le diff reviendrait à publier le tenseur complet) ; la séance n'est alors pas gelée. Si un lot tourne encore, le gel réessaie une dizaine de secondes puis échoue clairement.
+   Plafond : un tenseur dont plus de 10 % des éléments changent est refusé (le diff reviendrait à publier le tenseur complet) ; la séance n'est alors pas gelée. Tout le gel tient le verrou de séance : si un lot tourne encore, il réessaie une dizaine de secondes puis échoue clairement. Si l'écriture du diff échoue après la pose du gel, relancer `session-freeze`.
 
 2. Rejeu sur l'original (sha256 avant et après vérifiés, refus sinon ; les autres fichiers de l'original sont recopiés) :
 
@@ -115,6 +117,6 @@ Le harnais est la seule voie d'exécution du modèle pour l'agent éditeur (prot
    uv run slm-weight-editing report-gguf --checkpoint models/rejoue/s1 --base-checkpoint models/hf/qwen3.5-base --edit-diff models/sessions/s1/freeze/diff.json --tag qwen3.5-s1:0.8b
    ```
 
-   Sans `--edit-diff`, `report-gguf` garde son comportement (édition du MIT). Le `diff.json` de report décrit la séance (`edit.session_id`, sha256 du diff et du journal), jamais l'édition du MIT.
+   Un diff dont `files_changed` n'est pas vide (config ou tokenizer modifiés dans `work/`) est refusé : ces fichiers ne sont rejoués ni par `apply-diff` ni par `report-gguf`. Sans `--edit-diff`, `report-gguf` garde son comportement (édition du MIT). Le `diff.json` de report décrit la séance (`edit.session_id`, sha256 du diff et du journal), jamais l'édition du MIT.
 
 4. Comparer à une autre édition sans rejouer sur disque : `compare-edits --original <base> --diff-a models/sessions/s1/freeze/diff.json --edit-b <checkpoint>` (`--diff-a` remplace `--edit-a`, `--diff-b` remplace `--edit-b`).

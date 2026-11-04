@@ -198,7 +198,7 @@ def test_tensor_changed_during_freeze_is_refused(sess, monkeypatch):
         write_safetensors(directory / "work" / "f32.safetensors", {"w.f32": arr}, dtype="F32")
 
     monkeypatch.setattr(freeze, "_freeze_state", tampering)
-    with pytest.raises(FreezeError, match="work/ a changé pendant le gel"):
+    with pytest.raises(FreezeError, match="work/ a changé pendant le gel ; séance déjà gelée"):
         freeze_it(sess)
     assert not (sess["dir"] / "freeze").exists()
 
@@ -455,3 +455,149 @@ def test_compare_cli_accepts_diffs(sess, tmp_path):
         + ["--out", str(out)]
     )
     assert code == 1 and not out.exists()
+
+
+# --- Revue passe 1 ----------------------------------------------------------------------------
+
+
+def test_published_journal_has_no_local_path(sess, tmp_path):
+    data = tmp_path / "donnees" / "train.jsonl"
+    harness._append_journal(sess["dir"], {"event": "note", "data_path": str(data)})
+    diff = freeze_it(sess)
+    raw = (sess["dir"] / harness.JOURNAL_FILE).read_text("utf-8")
+    assert json.loads(raw.splitlines()[0])["base_checkpoint"] == str(sess["base"].resolve())
+    published = (sess["dir"] / "freeze" / harness.JOURNAL_FILE).read_bytes()
+    assert diff["journal"]["sha256"] == hashlib.sha256(published).hexdigest()
+    home = Path.home()
+    for f in (sess["dir"] / "freeze").iterdir():
+        text = f.read_bytes().decode("utf-8", "replace").replace("\\\\", "\\")
+        for local in (tmp_path, tmp_path.resolve(), home, home.resolve()):
+            assert str(local) not in text and local.as_posix() not in text, f.name
+    lines = [json.loads(line) for line in published.decode("utf-8").splitlines()]
+    assert lines[0]["base_checkpoint"] == ".../base"
+    assert lines[1]["data_path"] == ".../train.jsonl"
+    assert lines[0]["base_tensors_sha256"]  # contenu toujours identifié
+
+
+def test_public_path_keeps_paths_under_the_working_directory_relative():
+    assert freeze.public_path(str(Path.cwd() / "models" / "hf" / "q")) == "models/hf/q"
+    assert freeze.public_path("models/hf/q") == "models/hf/q"
+
+
+def test_whole_freeze_runs_under_the_session_lock(sess, monkeypatch):
+    real = freeze.compute_tensor_diff
+    seen = []
+
+    def spy(base, work):
+        seen.append((sess["dir"] / harness.LOCK_FILE).exists())
+        with pytest.raises(HarnessError, match="un lot tourne déjà"):
+            harness.update_state(sess["dir"], frozen=True)  # second gel concurrent
+        return real(base, work)
+
+    monkeypatch.setattr(freeze, "compute_tensor_diff", spy)
+    freeze_it(sess)
+    assert seen == [True] and not (sess["dir"] / harness.LOCK_FILE).exists()
+    events = [e["event"] for e in harness.read_journal(sess["dir"])]
+    assert events.count("freeze") == 1
+
+
+def test_failed_write_after_freeze_says_how_to_resume(sess, monkeypatch):
+    def broken(path, data):
+        raise OSError("disque plein")
+
+    monkeypatch.setattr(freeze, "_write_atomic", broken)
+    with pytest.raises(FreezeError, match="séance déjà gelée, relancer session-freeze"):
+        freeze_it(sess)
+    assert harness.read_state(sess["dir"]).frozen is True
+    monkeypatch.undo()
+    assert freeze_it(sess)["tensors"]  # reprise
+
+
+def _rewrite(diff_path: Path, mutate) -> None:
+    meta = json.loads(diff_path.read_text("utf-8"))
+    values = bytearray((diff_path.parent / freeze.VALUES_FILE).read_bytes())
+    mutate(meta, values)
+    (diff_path.parent / freeze.VALUES_FILE).write_bytes(bytes(values))
+    meta["values_file"] |= {"sha256": hashlib.sha256(values).hexdigest(), "bytes": len(values)}
+    diff_path.write_text(json.dumps(meta), "utf-8")
+
+
+def _set(key, value):
+    def mutate(meta, values):
+        meta["tensors"][0][key] = value
+
+    return mutate
+
+
+def _swap_indices(meta, values):
+    t = meta["tensors"][0]  # w.bf, deux indices u4 : on les inverse
+    o = t["indices_offset"]
+    values[o : o + 8] = values[o + 4 : o + 8] + values[o : o + 4]
+
+
+def _out_of_range_index(meta, values):
+    t = meta["tensors"][0]
+    o = t["indices_offset"] + 4
+    values[o : o + 4] = (t["numel"]).to_bytes(4, "little")
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (_set("numel", 10**6), "numel ou changed incohérents"),
+        (_set("changed", 10**6), "numel ou changed incohérents"),
+        (_set("index_dtype", "f8"), "index_dtype ou dtype non géré"),
+        (_set("index_dtype", "i4"), "index_dtype ou dtype non géré"),
+        (_set("indices_offset", 10**6), "indices_offset hors de diff.bin"),
+        (_set("values_offset", -1), "values_offset hors de diff.bin"),
+        (_set("shape", "x"), "forme invalide"),
+        (_swap_indices, "indices non triés ou en double"),
+        (_out_of_range_index, "indice hors du tenseur"),
+    ],
+)
+def test_malformed_diff_is_a_clean_diff_error(sess, tmp_path, capsys, mutate, message):
+    freeze_it(sess)
+    diff_path = sess["dir"] / "freeze" / "diff.json"
+    _rewrite(diff_path, mutate)
+    with pytest.raises(DiffError, match=message):
+        freeze.apply_diff(diff_path, sess["base"], tmp_path / "out")
+    assert not (tmp_path / "out").exists()
+    code = slm_weight_editing.main(
+        ["apply-diff", "--diff", str(diff_path), "--original", str(sess["base"])]
+        + ["--out", str(tmp_path / "out")]
+    )
+    assert code == 1 and message in capsys.readouterr().err
+    with pytest.raises(CompareError, match=message):
+        compare(sess["base"], None, sess["dir"] / "work", diff_a=diff_path)
+
+
+def test_report_gguf_refuses_a_diff_with_changed_files(tmp_path, capsys):
+    s, root = gguf_session(tmp_path)
+    (root / "g1" / "work" / "tokenizer_config.json").write_text("{}", "utf-8")
+    freeze.freeze_session("g1", s.base_checkpoint, sessions_root=root)
+    replayed = tmp_path / "models" / "rejoue"
+    freeze.apply_diff(root / "g1" / "freeze" / "diff.json", s.base_checkpoint, replayed)
+    out = tmp_path / "gguf"
+    code = slm_weight_editing.main(
+        ["report-gguf", "--checkpoint", str(replayed), "--tag", "t:1"]
+        + ["--base-checkpoint", str(s.base_checkpoint), "--ollama-models", str(s.store)]
+        + ["--edit-diff", str(root / "g1" / "freeze" / "diff.json"), "--out", str(out)]
+    )
+    err = capsys.readouterr().err
+    assert code == 1 and "tokenizer_config.json" in err and "ne les rejouent" in err
+    assert not out.exists()
+
+
+def test_session_open_and_status_show_the_freeze_ceiling(tmp_path, capsys):
+    base = write_checkpoint(tmp_path / "base", base_tensors())
+    root = ["--sessions-root", str(tmp_path / "sessions")]
+    assert (
+        slm_weight_editing.main(
+            ["session-open", "--session", "p1", "--budget", "10", "--base-checkpoint", str(base)]
+            + root
+        )
+        == 0
+    )
+    assert "Plafond du gel : au plus 10%" in capsys.readouterr().out
+    assert slm_weight_editing.main(["session-status", "--session", "p1", *root]) == 0
+    assert "Plafond du gel : au plus 10%" in capsys.readouterr().out
