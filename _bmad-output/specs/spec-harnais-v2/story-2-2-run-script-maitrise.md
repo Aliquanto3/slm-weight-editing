@@ -25,3 +25,16 @@ Reports : taille 50 Mio non configurable ; fichiers `runs/` jamais purgés.
 - Nit, low, second avis 4 : `snapshot` excluait tout `runs/`. Corrigé : seulement le `runs/` voisin d'un `workspace.json`.
 - Nit, low, second avis 2 : `log_sha256` non revérifié par `audit-session`. Rejeté : CAP-8 demande que le journal le garde, pas que l'audit le vérifie ; `runs/` est refusé à l'édition et aux scripts. Casse `Runs/` sous NTFS : rattaché au constat 7.
 - Pre-existing, low, second avis 7 : noms protégés en casse mixte sous NTFS (`Workspace.json`, `Runs/`) passent les deny ; déjà reporté au lot 1, non traité ici.
+
+### Passe 2 (2026-11-05, SHA revu 2c5aacd)
+
+Relu : le correctif 2c5aacd seulement (base `main` à jour, pas de rebase utile).
+
+- Vérifié, sans constat : `True` refusé comme nombre de threads (`isinstance(bool)` avant `int`) ; `inf`, `nan`, `1e300`, chaînes et 0 refusés à la création et à la relecture de `workspace.json`.
+- Vérifié, sans constat : `log_sha256` en flux égal au sha256 du fichier écrit, y compris tronqué (sonde à 400 000 octets coupés à 70 001) ; assertion ajoutée à `test_log_file_is_capped`.
+- Vérifié, sans constat : le test d'arbre discrimine sous Windows (lecture bloquée 5 s avec un simple `proc.kill()`), durées larges (15 s, 10 s), petit-enfant borné à 60 s.
+- Vérifié, sans constat : la sonde OpenBLAS hors bac à sable reproduit l'ordre du bac à sable (numpy préchargé par `_sandbox.py` avant le code de l'éditeur, puis `os.environ` modifié) ; elle ne contourne donc pas ce qu'elle prouve. macOS avec Accelerate : saut.
+- Nit, low, revue : échec de `Popen` après `open(..., "xb")` laissait un `.log` vide sans entrée au journal. Corrigé : fichier supprimé, test `test_popen_failure_leaves_no_log`.
+- Nit, low, revue : Ctrl-C (ou erreur d'écriture) pendant la lecture annulait le délai sans arrêter le script ; sous POSIX, `start_new_session` le soustrait au Ctrl-C, il tournait donc sans délai. Corrigé : arrêt de l'arbre puis `wait` avant de relever l'exception, test `test_interrupted_read_kills_script`.
+- Nit, low, revue : `script_timeout: true` relu dans un `workspace.json` modifié à la main vaut 1 s. Rejeté : seulement à la main, et sens sûr (délai plus court).
+- Complexité : 0 constat (lecture en flux, sha256 incrémental).

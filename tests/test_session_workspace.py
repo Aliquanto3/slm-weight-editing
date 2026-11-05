@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -879,6 +880,38 @@ def test_log_file_is_capped(ws):
     entry = script_runner.run_script("scripts/big.py", "s1", workspace=ws, max_log_bytes=1000)
     assert entry["log_bytes"] == 1000 and entry["log_truncated"] is True
     assert entry["output_bytes"] > 50000 and (ws / entry["log"]).stat().st_size == 1000
+    data = (ws / entry["log"]).read_bytes()
+    assert entry["log_sha256"] == hashlib.sha256(data).hexdigest()
+
+
+def test_popen_failure_leaves_no_log(ws, monkeypatch):
+    (ws / "scripts" / "t.py").write_text("print(1)", encoding="utf-8")
+
+    def boom(*a, **k):
+        raise OSError("lancement impossible")
+
+    monkeypatch.setattr(script_runner.subprocess, "Popen", boom)
+    with pytest.raises(OSError):
+        script_runner.run_script("scripts/t.py", "s1", workspace=ws)
+    assert not list((ws / "runs").glob("*.log"))
+
+
+def test_interrupted_read_kills_script(ws, monkeypatch):
+    # Ctrl-C pendant la lecture : le délai est annulé, l'arbre doit être arrêté quand même.
+    (ws / "scripts" / "t.py").write_text("import time; time.sleep(60)", encoding="utf-8")
+    seen = []
+
+    def interrupted(stream, *a, **k):
+        raise KeyboardInterrupt
+
+    real_kill = script_runner._kill_tree
+    monkeypatch.setattr(script_runner, "_bounded_read", interrupted)
+    monkeypatch.setattr(
+        script_runner, "_kill_tree", lambda proc: (seen.append(proc), real_kill(proc))
+    )
+    with pytest.raises(KeyboardInterrupt):
+        script_runner.run_script("scripts/t.py", "s1", workspace=ws)
+    assert len(seen) == 1 and seen[0].poll() is not None
 
 
 def test_runs_dir_not_writable_by_editor(ws):

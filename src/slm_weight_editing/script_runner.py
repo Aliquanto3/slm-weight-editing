@@ -229,15 +229,20 @@ def run_script(
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
         log_path = runs / f"{stamp}-{path.stem}.log"
         with open(log_path, "xb") as log:
-            proc = subprocess.Popen(
-                cmd,
-                cwd=workspace,
-                env=child_env(threads),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                start_new_session=sys.platform != "win32",
-            )
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    cwd=workspace,
+                    env=child_env(threads),
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=sys.platform != "win32",
+                )
+            except BaseException:
+                log.close()
+                log_path.unlink(missing_ok=True)  # pas de fichier vide sans entrée au journal
+                raise
             killed = threading.Event()
 
             def _kill() -> None:
@@ -251,6 +256,11 @@ def run_script(
                     proc.stdout, max_output, log, max_log_bytes
                 )
                 returncode = proc.wait()
+            except BaseException:
+                # Ctrl-C ou erreur d'écriture : le délai serait annulé, l'arbre resterait orphelin.
+                _kill_tree(proc)
+                proc.wait()
+                raise
             finally:
                 timer.cancel()
                 proc.stdout.close()
