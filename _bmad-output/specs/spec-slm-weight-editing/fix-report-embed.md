@@ -18,3 +18,14 @@ Base à jour (origin/main 18af519, pas de rebase nécessaire).
 - Nit, low, second avis 5 : test de ligne trop faible, cas de chemins manquants. Corrigé : octets hors du bloc édité comparés à l'officiel ; cas `.cachefoo/x`, `a/.cache/x`, séparateurs `\` et `..` (`test_is_ignored_file_only_ignores_the_top_level_cache`).
 - Complexité : 0 constat (aucune structure qui grossit pendant l'exécution).
 - Reporté : le report réel de s1 (diff s1, blob officiel, `token_embd` reproductible octet pour octet depuis la base) n'a pas tourné ici, les données ne sont pas dans le worktree. À vérifier par Anaël : `report-gguf --edit-diff models/sessions/s1/freeze/diff.json --base-checkpoint models/hf/qwen3.5-base ...` réussit, `fidelite.json` montre `token_embd.weight` en `ok`, et `gguf_blocks_changed` reste limité aux blocs de la ligne éditée.
+
+### Passe 2 (2026-11-05, SHA revu b6927ac)
+
+Base à jour (origin/main 18af519). Relu : `git diff cf8a765..b6927ac`. Aucun constat Important.
+
+- Vérifié : chemin MIT sans `--edit-diff` identique à origin/main (témoins = `down_proj` non visés, aucune exigence de `--base-checkpoint` pour des cibles `down_proj`).
+- Vérifié par exécution : `quantize_tensor` donne les mêmes octets qu'une passe unique (f32 et f16) pour 0, 1, 7, 2^18, 2^18+3, 2·2^18−1 et 3·2^18+17 blocs.
+- Vérifié par exécution : `_check_tied` accepte un `config.json` absent, sans la clé, `text_config` vide ou null, JSON non objet, et le vrai `models/hf/qwen3.5-base` ; refuse `false` à la racine et dans `text_config`.
+- Vérifié : `..` jamais ignoré (`/` et `\`), `a/.cache/x` et `.cachefoo/x` non ignorés.
+- Nit, low, reviewer : `--checkpoint` donné comme fichier `.safetensors` unique, `_check_tied` cherche `<fichier>/config.json` et saute le contrôle de config (les contrôles `lm_head` et `output.weight` restent). Reporté, non bloquant : le report de s1 passe un dossier.
+- Complexité : 0 constat.
