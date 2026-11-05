@@ -6,6 +6,7 @@ import json
 import os
 import re
 import sys
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -56,7 +57,8 @@ def snapshot(root: Path) -> dict[str, bytes]:
     out = {}
     for p in sorted(root.rglob("*")):
         rel = p.relative_to(root).as_posix()
-        runs = "/runs/" in rel or rel.startswith("runs/")
+        # runs/ du lanceur : seulement à la racine d'un espace (à côté de workspace.json).
+        runs = p.parent.name == "runs" and (p.parent.parent / "workspace.json").is_file()
         runner = rel.endswith("journal.jsonl") or "/s1/scripts/" in rel or runs
         if p.is_file() and not runner:
             out[rel] = p.read_bytes()
@@ -749,6 +751,10 @@ def test_limits_defaults_and_creation(tmp_path, base):
         ({"script_timeout": 0}, "--script-timeout refusé"),
         ({"script_max_timeout": -1}, "--script-max-timeout refusé"),
         ({"script_timeout": 7200}, "dépasse le délai maximum 3600 s"),
+        ({"script_max_timeout": float("inf")}, "--script-max-timeout refusé"),
+        ({"script_max_timeout": 1e300}, "au plus 86400 s"),
+        ({"script_timeout": float("nan")}, "--script-timeout refusé"),
+        ({"script_threads": 2.5}, "--script-threads refusé"),
     ],
 )
 def test_invalid_limits_refused_at_creation(tmp_path, base, kwargs, message):
@@ -780,24 +786,74 @@ def test_default_limits_for_workspace_without_limits_keys(ws):
     assert script_runner.script_limits(harness.find_workspace(ws)[1]) == (4, 900.0, 3600.0)
 
 
-def test_timeout_kills_process_tree():
-    if sys.platform == "win32":
-        pytest.skip("arbre vérifié sous POSIX (le script de l'éditeur ne lance pas de processus)")
-    import subprocess
-    import time
+@pytest.mark.parametrize("bad", [float("inf"), "x", 0])
+def test_damaged_limits_in_workspace_refused(ws, bad):
+    # Un délai infini relu tel quel ferait lever OverflowError au Timer : script sans délai.
+    info = json.loads((ws / "workspace.json").read_text("utf-8"))
+    info["script_max_timeout"] = bad
+    (ws / "workspace.json").write_text(json.dumps(info), encoding="utf-8")
+    (ws / "scripts" / "t.py").write_text("print(1)", encoding="utf-8")
+    with pytest.raises(harness.HarnessError):
+        script_runner.run_script("scripts/t.py", "s1", workspace=ws)
 
+
+def test_timeout_kills_process_tree():
+    # Le petit-enfant hérite du tube : sans arrêt de l'arbre, la lecture attend 60 s.
+    import subprocess
+
+    grandchild = "subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'])"
     proc = subprocess.Popen(
         [
             sys.executable,
             "-c",
-            "import subprocess,sys,time;"
-            "subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']);time.sleep(60)",
+            f"import subprocess,sys,time;{grandchild};print('ok',flush=True);time.sleep(60)",
         ],
-        start_new_session=True,
+        stdout=subprocess.PIPE,
+        start_new_session=sys.platform != "win32",
     )
-    time.sleep(1)
+    assert proc.stdout.readline().strip() == b"ok"
     script_runner._kill_tree(proc)
+    done = threading.Event()
+    threading.Thread(target=lambda: (proc.stdout.read(), done.set()), daemon=True).start()
+    assert done.wait(15), "un descendant tient encore le tube"
     assert proc.wait(timeout=10) != 0
+    proc.stdout.close()
+
+
+_BLAS_PROBE = """
+import ctypes, glob, os, sys
+import numpy as np
+os.environ.update({k: "64" for k in %r})
+root = os.path.dirname(np.__file__)
+libs = glob.glob(os.path.join(root, os.pardir, "numpy.libs", "*openblas*"))
+libs += glob.glob(os.path.join(root, ".dylibs", "*openblas*"))
+for f in libs:
+    fn = getattr(ctypes.CDLL(f), "openblas_get_num_threads", None)
+    if fn is not None:
+        print(fn())
+        break
+else:
+    print("absent")
+"""
+
+
+def test_blas_threads_measured_equal_cap_even_if_env_changed():
+    # Mesure effective (hors bac à sable, où ctypes est refusé) : l'OpenBLAS de numpy, chargé
+    # avec child_env(), garde le plafond même si le script change ensuite os.environ.
+    import subprocess
+
+    code = _BLAS_PROBE % (THREAD_VARS,)
+    for cap in (script_runner.DEFAULT_THREADS, 2):
+        out = subprocess.run(
+            [sys.executable, "-I", "-c", code],
+            env=script_runner.child_env(cap),
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        if out == "absent":
+            pytest.skip("numpy sans OpenBLAS embarqué")
+        assert out == str(cap)
 
 
 def test_full_output_goes_to_log_file(ws):

@@ -34,6 +34,7 @@ MAX_LOG_BYTES = 50 * 1024 * 1024  # au-delà, le fichier de sortie est coupé (d
 DEFAULT_THREADS = 4
 DEFAULT_TIMEOUT = 900  # 15 min
 DEFAULT_MAX_TIMEOUT = 3600  # 60 min
+TIMEOUT_CEILING = 86_400  # 24 h : plafond de tout délai (Timer fini)
 # Variables lues par les bibliothèques de calcul natives au chargement de numpy.
 _THREAD_VARS = (
     "OPENBLAS_NUM_THREADS",
@@ -69,23 +70,38 @@ def child_env(threads: int = DEFAULT_THREADS) -> dict[str, str]:
 
 
 def script_limits(info: dict | None) -> tuple[int, float, float]:
-    """(threads, délai par défaut, délai maximum) de `workspace.json` ; défauts hors espace."""
+    """(threads, délai par défaut, délai maximum) de `workspace.json` ; défauts hors espace.
+
+    Les valeurs relues sont validées comme à la création (fichier abîmé : refus net).
+    """
     info = info or {}
-    return (
-        int(info.get("script_threads", DEFAULT_THREADS)),
-        float(info.get("script_timeout", DEFAULT_TIMEOUT)),
-        float(info.get("script_max_timeout", DEFAULT_MAX_TIMEOUT)),
-    )
+    try:
+        limits = (
+            info.get("script_threads", DEFAULT_THREADS),
+            float(info.get("script_timeout", DEFAULT_TIMEOUT)),
+            float(info.get("script_max_timeout", DEFAULT_MAX_TIMEOUT)),
+        )
+    except (TypeError, ValueError) as exc:
+        raise harness.HarnessError(
+            f"workspace.json : réglages run-script illisibles ({exc})"
+        ) from exc
+    check_limits(*limits)
+    return limits
 
 
 def check_limits(threads: int, timeout: float, max_timeout: float) -> None:
-    """Valide les trois réglages (création de l'espace) ; lève HarnessError."""
-    if threads < 1:
-        raise harness.HarnessError(f"--script-threads refusé : {threads} (au moins 1)")
-    if not timeout > 0:
-        raise harness.HarnessError(f"--script-timeout refusé : {timeout:g} s (strictement positif)")
-    if not max_timeout > 0:
-        raise harness.HarnessError(f"--script-max-timeout refusé : {max_timeout:g} s (positif)")
+    """Valide les trois réglages (création de l'espace, lecture) ; lève HarnessError.
+
+    Délais finis et bornés à `TIMEOUT_CEILING` : au-delà, `threading.Timer` lève OverflowError
+    dans son thread et le script tournerait sans délai.
+    """
+    if isinstance(threads, bool) or not isinstance(threads, int) or threads < 1:
+        raise harness.HarnessError(f"--script-threads refusé : {threads} (entier, au moins 1)")
+    for flag, value in (("--script-timeout", timeout), ("--script-max-timeout", max_timeout)):
+        if not 0 < value <= TIMEOUT_CEILING:
+            raise harness.HarnessError(
+                f"{flag} refusé : {value:g} s (strictement positif, au plus {TIMEOUT_CEILING} s)"
+            )
     if timeout > max_timeout:
         raise harness.HarnessError(
             f"--script-timeout refusé : {timeout:g} s dépasse le délai maximum {max_timeout:g} s"
@@ -128,9 +144,9 @@ def _resolve_script(workspace: Path, script: str) -> Path:
 def _bounded_read(stream, limit: int, log=None, log_limit: int = MAX_LOG_BYTES):
     """Lit tout le flux ; garde `limit` octets, écrit au plus `log_limit` octets dans `log`.
 
-    Renvoie (extrait, total lu, octets écrits dans le fichier).
+    Renvoie (extrait, total lu, octets écrits dans le fichier, sha256 de ces octets).
     """
-    kept, total, written = bytearray(), 0, 0
+    kept, total, written, digest = bytearray(), 0, 0, hashlib.sha256()
     while chunk := stream.read(65536):
         total += len(chunk)
         if len(kept) < limit:
@@ -138,8 +154,9 @@ def _bounded_read(stream, limit: int, log=None, log_limit: int = MAX_LOG_BYTES):
         if log is not None and written < log_limit:
             part = chunk[: log_limit - written]
             log.write(part)
+            digest.update(part)
             written += len(part)
-    return bytes(kept), total, written
+    return bytes(kept), total, written, digest.hexdigest()
 
 
 def run_script(
@@ -205,34 +222,38 @@ def run_script(
                 raise harness.HarnessError(f"espace de séance sous l'interpréteur ({r}) refusé")
         started = harness._now()
         cmd = [sys.executable, "-I", "-B", "-X", "utf8", str(_BOOT), json.dumps(cfg)]
-        proc = subprocess.Popen(
-            cmd,
-            cwd=workspace,
-            env=child_env(threads),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            start_new_session=sys.platform != "win32",
-        )
-        killed = threading.Event()
-
-        def _kill() -> None:
-            killed.set()
-            _kill_tree(proc)
-
+        # Fichier de sortie créé avant le lancement : une collision ou une erreur disque refuse
+        # le script sans laisser d'enfant orphelin.
         runs = workspace / RUNS_DIR
         runs.mkdir(exist_ok=True)
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
         log_path = runs / f"{stamp}-{path.stem}.log"
-        timer = threading.Timer(timeout, _kill)
-        timer.start()
-        try:
-            with open(log_path, "xb") as log:
-                output, total, written = _bounded_read(proc.stdout, max_output, log, max_log_bytes)
-            returncode = proc.wait()
-        finally:
-            timer.cancel()
-            proc.stdout.close()
+        with open(log_path, "xb") as log:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=workspace,
+                env=child_env(threads),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                start_new_session=sys.platform != "win32",
+            )
+            killed = threading.Event()
+
+            def _kill() -> None:
+                killed.set()
+                _kill_tree(proc)
+
+            timer = threading.Timer(timeout, _kill)
+            timer.start()
+            try:
+                output, total, written, log_sha256 = _bounded_read(
+                    proc.stdout, max_output, log, max_log_bytes
+                )
+                returncode = proc.wait()
+            finally:
+                timer.cancel()
+                proc.stdout.close()
         timed_out = killed.is_set()
         text = output.decode("utf-8", "replace")
         entry = {
@@ -247,7 +268,7 @@ def run_script(
             "output_bytes": total,
             "log": f"{RUNS_DIR}/{log_path.name}",
             "log_bytes": written,
-            "log_sha256": hashlib.sha256(log_path.read_bytes()).hexdigest(),
+            "log_sha256": log_sha256,
             "log_truncated": written < total,
             "timeout": timeout,
             "started_at": started,
