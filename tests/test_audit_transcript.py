@@ -946,21 +946,31 @@ def test_other_uv_variable_in_settings_is_refused(tmp_path, local):
     ]
 
 
-@pytest.mark.parametrize("mode", ["on", "off"])
-def test_consigne_commands_pass_the_audit_once_placeholders_are_filled(mode):
+def test_consigne_commands_pass_the_audit_once_placeholders_are_filled():
     # Les commandes du bloc de la consigne rendue, gabarits remplis, passent la liste blanche :
-    # aucune forme `on|off` (barre verticale = enchaînement refusé) ne doit y rester.
+    # une ligne run-batch complète par mode, aucune forme `on|off` (barre = enchaînement refusé)
+    # ni `<MODE>` (chevron = redirection refusée), même recopiées telles quelles.
     from slm_weight_editing.workspace import render
 
     text = render("CONSIGNE.md", session_id="s1", budget=10, repo=REPO, data=["gsm8k-train.jsonl"])
     block = text.split("```\n", 2)[1]
     commands = [line for line in block.splitlines() if line.strip()]
-    assert len(commands) == 3
+    assert len(commands) == 4
+    assert [c.split("--thinking ")[1].split()[0] for c in commands[:2]] == ["on", "off"]
     for command in commands:
         filled = (
             command.replace("<fichier>", "gsm8k-train.jsonl")
-            .replace("<MODE>", mode)
             .replace("<nom>", "edit")
             .replace("[--start N] [--count N]", "--start 0 --count 8")
         )
         assert audit.check_shell(filled, CTX_S1) == [], filled
+
+
+@pytest.mark.parametrize("name", ["CONSIGNE.md", "CLAUDE.md"])
+def test_instructions_give_thinking_modes_without_unsafe_forms(name):
+    from slm_weight_editing.workspace import render
+
+    text = render(name, session_id="s1", budget=10, repo=REPO, data=["gsm8k-train.jsonl"])
+    assert "--thinking on" in text and "--thinking off" in text
+    assert "<MODE>" not in text
+    assert "--thinking on|off" not in text

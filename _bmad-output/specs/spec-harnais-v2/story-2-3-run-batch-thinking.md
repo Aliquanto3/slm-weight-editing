@@ -1,5 +1,5 @@
 ---
-status: done
+status: review
 story: "2.3"
 title: run-batch --thinking on|off (CAP-2)
 ---
@@ -31,3 +31,13 @@ Base à jour (origin/main c26a27c). Suite complète, ruff check et format verts 
 - Nit, low, second avis 5 : corrigé. `run()` contrôle le mode avant `bind_workspace`.
 - Nit, low, second avis 6 : corrigé. Test : sans mode, sur séance gelée, le refus du mode passe en premier, journal et budget inchangés.
 - Complexité : 0 constat (`batches_by_thinking` lit le journal une fois, seulement à `session-status`).
+
+### Passe 2 (2026-11-05, SHA revu e6f1ad3)
+
+Relu : le correctif e6f1ad3 seul. Base à jour (origin/main c26a27c). Suite complète (506 réussis, 1 sauté, CPU seulement), ruff check et format verts après correctif.
+
+- Important, medium, orchestrateur : corrigé. Le gabarit `--thinking <MODE>`, recopié tel quel, est une redirection : `check_shell` rend `commande-hors-liste` (« substitution, accent grave ou redirection », vérifié), donc une faute d'audit et non un refus clair du harnais. Consigne : deux lignes `run-batch` complètes, `--thinking on` et `--thinking off`, sans gabarit de mode. Test réaligné (4 commandes, mode de chaque ligne vérifié) et nouveau test : `CONSIGNE.md` et `CLAUDE.md` rendus donnent `--thinking on` et `--thinking off`, sans `<MODE>` ni `--thinking on|off`.
+- Nit, low, orchestrateur : corrigé. Fiche passée à `done` avant la fin de la revue, remise à `review`.
+- Pre-existing, low, reviewer : reporté. `data/<fichier>` et `scripts/<nom>.py` ont le même défaut (chevrons recopiés = redirection, faute d'audit) ; hors périmètre de la story.
+- Vérifié sans constat : la ligne `batch` (`thinking` demandé, `settings.thinking` null en `raw`) reste lisible par le gel (`public_journal` ne masque que les chemins), l'audit (ne lit que `data_path`) et compare-edits (ne lit pas le journal) ; `check_thinking` avant `bind_workspace` dans `run()`.
+- Complexité : 0 constat.
