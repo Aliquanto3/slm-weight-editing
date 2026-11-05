@@ -3,26 +3,32 @@ from pathlib import Path
 import gguf
 import numpy as np
 import pytest
+from conftest import PARAMS, to_bf16, write_store
 
 from slm_weight_editing import main
 from slm_weight_editing.gguf_add_output import AddOutputError, add_output_weight
 from slm_weight_editing.gguf_file import read_gguf
 from slm_weight_editing.q8_0 import dequantize_q8_0
 
-DTYPES = {"F16": "<f2", "F32": "<f4"}
 
-
-def make(path: Path, embd_type: str, extra: dict[str, np.ndarray] | None = None) -> np.ndarray:
+def make(
+    path: Path, embd_type: str, extra: dict[str, np.ndarray] | None = None, alignment: int = 0
+) -> np.ndarray:
     """GGUF synthétique minuscule ; renvoie les valeurs float32 de token_embd."""
     rng = np.random.default_rng(3)
     values = rng.normal(0, 0.5, (5, 64)).astype(np.float32)
     w = gguf.GGUFWriter(str(path), arch="qwen35")
+    if alignment:
+        w.add_custom_alignment(alignment)
     w.add_string("general.name", "synthétique")
     w.add_array("tokenizer.ggml.tokens", ["a", "bé", "c"])
     w.add_tensor("blk.0.norm.weight", np.arange(16, dtype=np.float32))
     if embd_type == "Q8_0":
         q = gguf.quants.quantize(values, gguf.GGMLQuantizationType.Q8_0)
         w.add_tensor("token_embd.weight", q, raw_dtype=gguf.GGMLQuantizationType.Q8_0)
+    elif embd_type == "BF16":
+        bf = to_bf16(values)
+        w.add_tensor("token_embd.weight", bf, raw_dtype=gguf.GGMLQuantizationType.BF16)
     else:
         dtype = {"F16": np.float16, "F32": np.float32}[embd_type]
         w.add_tensor("token_embd.weight", values.astype(dtype))
@@ -35,14 +41,24 @@ def make(path: Path, embd_type: str, extra: dict[str, np.ndarray] | None = None)
     return values
 
 
-@pytest.mark.parametrize("embd_type", ["Q8_0", "F16", "F32"])
-def test_adds_output_weight_and_keeps_everything_else(tmp_path, embd_type):
+def kv_bytes(path: Path) -> bytes:
+    """Octets des métadonnées (tableaux compris), après le nombre de tenseurs."""
+    from slm_weight_editing.gguf_add_output import _header_ends
+
+    return path.read_bytes()[16 : _header_ends(path)[0]]
+
+
+@pytest.mark.parametrize(
+    ("embd_type", "alignment"), [("Q8_0", 0), ("F16", 0), ("F32", 0), ("BF16", 0), ("Q8_0", 64)]
+)
+def test_adds_output_weight_and_keeps_everything_else(tmp_path, embd_type, alignment):
     src, dst = tmp_path / "in.gguf", tmp_path / "out" / "out.gguf"
-    make(src, embd_type)
+    values = make(src, embd_type, alignment=alignment)
     res = add_output_weight(src, dst, store=tmp_path / "store")
     a, b = read_gguf(src), read_gguf(dst)
     assert list(b.tensors) == [*a.tensors, "output.weight"]
-    assert b.metadata == a.metadata and b.alignment == a.alignment
+    assert b.metadata == a.metadata and b.alignment == a.alignment == (alignment or 32)
+    assert kv_bytes(dst) == kv_bytes(src)
     for name in a.tensors:
         assert b.read_tensor_bytes(name) == a.read_tensor_bytes(name)
         assert b.tensors[name].dims == a.tensors[name].dims
@@ -55,8 +71,7 @@ def test_adds_output_weight_and_keeps_everything_else(tmp_path, embd_type):
         assert got == a.read_tensor_bytes("token_embd.weight")
         assert res["mode"] == "copie d'octets"
     else:
-        want = np.frombuffer(a.read_tensor_bytes("token_embd.weight"), DTYPES[embd_type])
-        assert np.abs(dequantize_q8_0(got) - want.astype(np.float32)).max() < 0.5 / 127 * 2
+        assert np.abs(dequantize_q8_0(got).reshape(values.shape) - values).max() < 0.03
         assert res["mode"] == "requantifié"
     assert res["added_bytes"] == dst.stat().st_size - src.stat().st_size > 0
 
@@ -119,3 +134,29 @@ def test_cli(tmp_path, capsys):
     assert "Q8_0 (requantifié)" in capsys.readouterr().out
     assert main([*argv, "--ollama-models", str(tmp_path / "s")]) == 2
     assert "existe déjà" in capsys.readouterr().err
+
+
+def test_cli_model_writes_faithful_modelfiles(tmp_path, capsys, monkeypatch):
+    src = tmp_path / "in.gguf"
+    make(src, "Q8_0")
+    store = write_store(tmp_path / "store", src, template="{{ .Prompt }}")
+    monkeypatch.chdir(tmp_path)
+    argv = ["gguf-add-output", "--model", "qwen3.5:0.8b", "--ollama-models", str(store)]
+    assert main(argv) == 0
+    dst = tmp_path / "models" / "qwen3.5-0.8b-output.gguf"
+    assert read_gguf(dst).tensors.keys() >= {"output.weight"}
+    test_mf = (tmp_path / "models" / "qwen3.5-0.8b-output.Modelfile").read_text("utf-8")
+    control_mf = (tmp_path / "models" / "qwen3.5-0.8b-output-temoin.Modelfile").read_text("utf-8")
+    assert test_mf.splitlines()[0] == f"FROM {dst.resolve().as_posix()}"
+    first = control_mf.splitlines()[0]
+    assert first.startswith("FROM ") and "/blobs/sha256-" in first
+    assert test_mf.splitlines()[1:] == control_mf.splitlines()[1:]
+    for line in ("RENDERER qwen3.5", "PARSER qwen3.5", "PARAMETER presence_penalty 1.5"):
+        assert line in test_mf
+    assert len([x for x in test_mf.splitlines() if x.startswith("PARAMETER")]) == len(PARAMS)
+    assert 'TEMPLATE """{{ .Prompt }}"""' in test_mf and "LICENSE" in test_mf
+    capsys.readouterr()
+    dst.unlink()
+    assert main(argv) == 2  # Modelfiles existants : rien n'est écrasé
+    assert "Modelfile existe déjà" in capsys.readouterr().err
+    assert not dst.exists()

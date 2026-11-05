@@ -24,6 +24,7 @@ import numpy as np
 from slm_weight_editing.gguf_file import GGUFError, _Cursor, read_gguf
 from slm_weight_editing.ollama_store import OllamaStoreError, default_store, load_model
 from slm_weight_editing.q8_0 import QK8_0, bf16_bytes_to_f32, quantize_q8_0
+from slm_weight_editing.report_gguf import ReportError, render_modelfile
 
 SOURCE, TARGET = "token_embd.weight", "output.weight"
 GGML_Q8_0 = 8
@@ -145,21 +146,43 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     p.set_defaults(func=run)
 
 
+def modelfile_paths(dst: str | Path) -> tuple[Path, Path]:
+    """Modelfile de l'essai et Modelfile témoin (GGUF officiel), à côté de la sortie."""
+    dst = Path(dst)
+    return dst.parent / f"{dst.stem}.Modelfile", dst.parent / f"{dst.stem}-temoin.Modelfile"
+
+
 def run(args: argparse.Namespace) -> int:
+    modelfiles: list[Path] = []
     try:
+        official = None
         if args.model:
-            src = load_model(args.model, args.ollama_models).model_blob
+            official = load_model(args.model, args.ollama_models)
+            src = official.model_blob
             default = "models/" + args.model.replace(":", "-").replace("/", "-")
         else:
             src = Path(args.gguf)
             default = "models/" + src.stem
-        dst = args.out or default + "-output.gguf"
+        dst = Path(args.out or default + "-output.gguf")
+        if official is not None:
+            test_mf, control_mf = modelfile_paths(dst)
+            for path in (test_mf, control_mf):
+                if path.exists():
+                    raise AddOutputError(f"le Modelfile existe déjà : {path}")
+            # Rendus avant l'écriture du GGUF : un gabarit non transcriptible n'écrit rien.
+            texts = [render_modelfile(dst, official), render_modelfile(src, official)]
         res = add_output_weight(src, dst, args.ollama_models)
-    except (OSError, ValueError, GGUFError, OllamaStoreError) as exc:
+        if official is not None:
+            for path, text in zip((test_mf, control_mf), texts, strict=True):
+                path.write_text(text, "utf-8")
+                modelfiles.append(path)
+    except (OSError, ValueError, GGUFError, OllamaStoreError, ReportError) as exc:
         print(f"Erreur : {exc}", file=sys.stderr)
         return 2
     print(f"{res['output']} écrit : {TARGET} {res['dims']} Q8_0 ({res['mode']}), ", end="")
     print(f"+{res['added_bytes']} octets, source {res['source_type']}")
     if res["tie_keys"]:
         print(f"Attention : métadonnées de liaison non modifiées : {', '.join(res['tie_keys'])}")
+    for path in modelfiles:
+        print(f"{path} écrit")
     return 0
