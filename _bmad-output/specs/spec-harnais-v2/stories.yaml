@@ -1,0 +1,76 @@
+- id: "1"
+  title: Verrou avec PID et session-unlock
+  description: >-
+    CAP-7 de SPEC.md : session.lock porte le PID et l'heure, les refus disent si le processus vit ;
+    session-unlock (Anaël seulement) retire un verrou dont le processus est mort et le journalise.
+  invoke_dev_with: >-
+    session-unlock interdit à l'éditeur dans le settings.json de l'espace (deny) et dans la liste
+    de l'audit ; réaligner test_harness.py, test_session_workspace.py et test_audit_transcript.py.
+- id: "2"
+  title: "run-script : threads plafonnés, délai par script, sortie dans un fichier"
+  description: >-
+    CAP-8 de SPEC.md : 4 threads BLAS non relevables, délai 15 min par défaut et 60 min au plus,
+    valeurs fixées à la création de l'espace ; sortie complète écrite dans un fichier de l'espace.
+  invoke_dev_with: >-
+    Les variables de threads doivent être posées avant le préchargement de numpy dans l'amorce ;
+    le journal garde extrait, taille et sha256 du fichier de sortie. Les 28 scripts interdits
+    restent en échec.
+- id: "3"
+  title: "run-batch --thinking on|off"
+  description: >-
+    CAP-2 de SPEC.md : mode raisonnement explicite et obligatoire à chaque lot, inscrit dans la
+    ligne batch du journal.
+  invoke_dev_with: >-
+    Réaligner les règles allow du settings.json de l'espace et la liste blanche de l'audit si la
+    forme de la commande change ; tokenizer de test avec un gabarit qui lit enable_thinking.
+- id: "4"
+  title: Commande probe et budget de probe
+  description: >-
+    CAP-1 de SPEC.md et probe-captures.md : forward forcé sans génération, captures en .npy
+    float32, budget de 2 M jetons séparé du budget de lots, plafonds par appel.
+  spec_checkpoint: true
+  invoke_dev_with: >-
+    Mêmes garanties que run-batch (inference_mode, rechargement de work/, sha256 journalisés,
+    réservation avant calcul sous verrou). Ajouter probe aux allow de l'espace et à la liste de
+    l'audit ; vérifier que le crochet du lanceur laisse lire un .npy en mmap_mode.
+- id: "5"
+  title: "Espace de séance : lecture libre, OPERATEUR.md, refus expliqués, BLOCAGES.md"
+  description: >-
+    CAP-4, CAP-5, CAP-6 et la consigne de CAP-3 de SPEC.md : lecture libre dans l'espace par les
+    outils et les scripts, OPERATEUR.md écrit hors de l'espace, messages de refus avec la voie
+    permise, notes/BLOCAGES.md, interdiction du décodage autorégressif dans la consigne.
+  spec_checkpoint: true
+  invoke_dev_with: >-
+    Story à risque : les 10 contournements et les 28 scripts interdits de la v1 restent en échec,
+    aucune lecture hors de l'espace. Les refus des règles deny de Claude Code ne se personnalisent
+    pas par settings.json : vérifier dans la doc officielle le moyen d'expliquer un refus (hook
+    PreToolUse) avant de coder.
+- id: "6"
+  title: "Audit : faux positifs de s1, signalement du décodage autorégressif"
+  description: >-
+    CAP-9 et l'audit de CAP-3 de SPEC.md : re.compile, décodage des octets du tokenizer et Grep
+    sur le journal acceptés ; scripts et suites de probes suspects listés pour relecture par Anaël.
+  spec_checkpoint: true
+  invoke_dev_with: >-
+    Les 73 transcriptions de violation restent en échec. Cas de test tirés de s1 sous forme
+    synthétique (aucun fichier de l'espace s1 dans le dépôt) : forward numpy génératif signalé,
+    rejeu en forward forcé non signalé.
+- id: "7"
+  title: Essai de chargement d'output.weight par Ollama
+  description: >-
+    Préalable de CAP-10 de SPEC.md : produire un GGUF de qwen3.5:0.8b avec output.weight Q8_0
+    copié de token_embd ; Anaël lance ollama create et compare les réponses à l'officiel.
+  done_checkpoint: true
+  invoke_dev_with: >-
+    Aucun Ollama lancé par l'agent. Livrer la commande et la marche à suivre pour Anaël
+    (prompts, température 0, comparaison) ; si l'essai échoue, CAP-10 sort de s2.
+- id: "8"
+  title: lm_head détaché
+  description: >-
+    CAP-10 de SPEC.md : commande du harnais qui détache lm_head au choix de l'éditeur, une fois et
+    journalisée ; gel, apply-diff, report-gguf et compare-edits gèrent le tenseur ajouté.
+  spec_checkpoint: true
+  invoke_dev_with: >-
+    report-gguf refuse aujourd'hui un output.weight (_check_tied, fix-report-embed.md) : adapter
+    sans affaiblir le contrôle pour le cas lié. Témoin : output.weight égal à token_embd avant
+    édition. Réaligner test_report_gguf.py, test_freeze.py et test_compare_edits.py.
