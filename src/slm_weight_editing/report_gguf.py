@@ -45,14 +45,27 @@ WSP_EDITED_SHA256 = {
 DIFF_FORMAT = "slm-weight-editing/diff-v1"
 SUPPORTED_GGML_TYPES = ("Q8_0",)
 
-# Seule correspondance vérifiée sur le GGUF officiel de qwen3.5:0.8b (blk.N.ffn_down.weight,
-# Q8_0, dims ggml (3584, 1024) pour une forme HF (1024, 3584)) ; les autres noms sont refusés.
+# Correspondances vérifiées sur le GGUF officiel de qwen3.5:0.8b ; les autres noms sont refusés.
+# blk.N.ffn_down.weight : Q8_0, dims ggml (3584, 1024) pour une forme HF (1024, 3584).
+# token_embd.weight : Q8_0, dims ggml (1024, 248320) pour HF (248320, 1024) ; embeddings liés
+# (pas de output.weight). Les blocs de 32 courent le long de la dimension contiguë (une ligne HF).
+# Troisième champ : tenseur témoin quand il n'est pas visé. token_embd ne l'est pas (jamais
+# vérifié reproductible octet pour octet, ~1 Go en f32) : visé, son original est son seul témoin.
 _HF_TO_GGUF = (
     (
         re.compile(r"^model\.(?:language_model\.)?layers\.(\d+)\.mlp\.down_proj\.weight$"),
-        "ffn_down",
+        "blk.{}.ffn_down.weight",
+        True,
+    ),
+    (
+        re.compile(r"^model\.(?:language_model\.)?embed_tokens\.weight$"),
+        "token_embd.weight",
+        False,
     ),
 )
+TIED_EMBEDDING = "token_embd.weight"
+# Blocs Q8_0 quantifiés par tranche : pic mémoire borné (token_embd : 254 M valeurs).
+_QUANT_CHUNK_BLOCKS = 1 << 18
 
 
 class ReportError(Exception):
@@ -75,11 +88,16 @@ class FidelityError(ReportError):
 
 def gguf_name(hf_name: str) -> str | None:
     """Nom GGUF d'un tenseur HF, ou None s'il n'a pas de correspondance vérifiée."""
-    for pattern, suffix in _HF_TO_GGUF:
+    for pattern, template, _ in _HF_TO_GGUF:
         m = pattern.match(hf_name)
         if m:
-            return f"blk.{m.group(1)}.{suffix}.weight"
+            return template.format(*m.groups())
     return None
+
+
+def is_witness(hf_name: str) -> bool:
+    """Tenseur non visé qui sert de témoin de fidélité (down_proj seulement, comme au lot 0)."""
+    return any(p.match(hf_name) and witness for p, _, witness in _HF_TO_GGUF)
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -110,7 +128,32 @@ def _check_pair(st: SafeTensor, info: TensorInfo) -> None:
 
 
 def quantize_tensor(st: SafeTensor, intermediate: str) -> bytes:
-    return quantize_q8_0(bf16_bytes_to_f32(st.read_bytes()), intermediate)
+    """Q8_0 des octets bf16, par tranches de blocs (chaque bloc se quantifie seul)."""
+    raw = st.read_bytes()
+    step = 2 * QK8_0 * _QUANT_CHUNK_BLOCKS
+    return b"".join(
+        quantize_q8_0(bf16_bytes_to_f32(raw[i : i + step]), intermediate)
+        for i in range(0, len(raw), step)
+    )
+
+
+def _check_tied(checkpoint: str | Path, edited: dict[str, SafeTensor], gguf: GGUFFile) -> None:
+    """token_embd sert aussi de sortie (pas de output.weight) : le checkpoint doit être lié."""
+    if "output.weight" in gguf.tensors:
+        raise ReportError(f"{TIED_EMBEDDING} visé mais le GGUF a un output.weight distinct")
+    heads = [n for n in edited if n == "lm_head.weight" or n.endswith(".lm_head.weight")]
+    if heads:
+        raise ReportError(f"embed_tokens visé mais le checkpoint a un {heads[0]} distinct")
+    config = Path(checkpoint) / "config.json"
+    if not config.is_file():
+        return
+    try:
+        data = json.loads(config.read_text("utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ReportError(f"{config} illisible : {exc}") from exc
+    sections = [data, data.get("text_config")] if isinstance(data, dict) else []
+    if any(isinstance(c, dict) and c.get("tie_word_embeddings") is False for c in sections):
+        raise ReportError(f"embed_tokens visé mais {config} déclare tie_word_embeddings: false")
 
 
 def q8_0_gap(official: bytes, recomputed: bytes, ne0: int, limit: int = 5) -> dict:
@@ -319,12 +362,20 @@ def _report(
         st, info = edited[hf_name], gguf.tensor(name)
         _check_pair(st, info)
         targets.append((st, info))
+    if any(info.name == TIED_EMBEDDING for _, info in targets):
+        _check_tied(checkpoint, edited, gguf)
+    unwitnessed = [info.name for st, info in targets if not is_witness(st.name)]
+    if unwitnessed and base is None:
+        raise ReportError(
+            f"{', '.join(unwitnessed)} : aucun témoin de même nature ; --base-checkpoint requis "
+            "(l'original du tenseur visé sert de témoin)"
+        )
 
     # 2. Contrôle de fidélité, avant toute écriture de GGUF.
     controls = [
         ("checkpoint édité, tenseur non visé", st)
         for name, st in sorted(edited.items())
-        if name not in expected and gguf_name(name) in gguf.tensors
+        if name not in expected and is_witness(name) and gguf_name(name) in gguf.tensors
     ]
     if base is not None:
         for hf_name in expected:

@@ -607,3 +607,100 @@ def test_session_open_and_status_show_the_freeze_ceiling(tmp_path, capsys):
     assert "Plafond du gel : au plus 10%" in capsys.readouterr().out
     assert slm_weight_editing.main(["session-status", "--session", "p1", *root]) == 0
     assert "Plafond du gel : au plus 10%" in capsys.readouterr().out
+
+
+def cache_session(sess):
+    """Séance s2 ouverte sur une base qui contient `.cache/` (absent de work/), édition copiée."""
+    cache = sess["base"] / ".cache" / "huggingface" / "download"
+    cache.mkdir(parents=True)
+    (cache / "x.metadata").write_text("meta", "utf-8")
+    harness.open_session("s2", 10, sess["base"], base_revision=REV, sessions_root=sess["root"])
+    work = sess["root"] / "s2" / "work"
+    assert not (work / ".cache").exists()
+    for f in (sess["dir"] / "work").glob("*.safetensors"):
+        shutil.copy(f, work / f.name)
+    return lambda: freeze.freeze_session("s2", sess["base"], sessions_root=sess["root"])
+
+
+def test_freeze_ignores_hf_cache_files_absent_from_work(sess):
+    freeze_s2 = cache_session(sess)
+    (sess["root"] / "s2" / "work" / "config.json").write_text('{"a": 3}', "utf-8")
+    diff = freeze_s2()
+    assert [f["path"] for f in diff["files_changed"]] == ["config.json"]
+    assert freeze.changed_files({".cache/huggingface/x": "aa"}, {}) == []
+    assert freeze.changed_files({".cache/a": "aa"}, {".cache/a": "bb", "cache.txt": "cc"}) == [
+        {"path": "cache.txt", "sha256_before": None, "sha256_after": "cc"}
+    ]
+
+
+def test_freeze_with_only_cache_files_gives_empty_files_changed(sess):
+    assert cache_session(sess)()["files_changed"] == []
+
+
+def cache_only_diff(tmp_path):
+    """Diff de séance dont files_changed ne contient que des entrées `.cache/` (comme s1)."""
+    s, root = gguf_session(tmp_path)
+    freeze.freeze_session("g1", s.base_checkpoint, sessions_root=root)
+    path = root / "g1" / "freeze" / "diff.json"
+    meta = json.loads(path.read_text("utf-8"))
+    meta["files_changed"] = [
+        {"path": f".cache/huggingface/download/{n}.metadata", "sha256_before": "ab" * 32}
+        | {"sha256_after": None}
+        for n in ("a", "b")
+    ]
+    path.write_text(json.dumps(meta), "utf-8")
+    return s, path
+
+
+def test_cache_only_files_changed_do_not_block_apply_diff_and_report(tmp_path, capsys):
+    s, diff_path = cache_only_diff(tmp_path)
+    replayed = tmp_path / "models" / "rejoue"
+    assert (
+        slm_weight_editing.main(
+            ["apply-diff", "--diff", str(diff_path), "--original", str(s.base_checkpoint)]
+            + ["--out", str(replayed)]
+        )
+        == 0
+    )
+    assert "Attention" not in capsys.readouterr().out
+    out = tmp_path / "gguf"
+    code = slm_weight_editing.main(
+        ["report-gguf", "--checkpoint", str(replayed), "--tag", "t:1"]
+        + ["--base-checkpoint", str(s.base_checkpoint), "--ollama-models", str(s.store)]
+        + ["--edit-diff", str(diff_path), "--out", str(out)]
+    )
+    assert code == 0, capsys.readouterr().err
+    assert (out / "t-1.gguf").exists()
+
+
+def test_cache_entry_does_not_hide_another_changed_file(tmp_path, capsys):
+    s, diff_path = cache_only_diff(tmp_path)
+    meta = json.loads(diff_path.read_text("utf-8"))
+    meta["files_changed"].append({"path": "config.json", "sha256_before": None})
+    diff_path.write_text(json.dumps(meta), "utf-8")
+    code = slm_weight_editing.main(
+        ["report-gguf", "--checkpoint", str(s.base_checkpoint), "--tag", "t:1"]
+        + ["--base-checkpoint", str(s.base_checkpoint)]
+        + ["--ollama-models", str(s.store), "--edit-diff", str(diff_path)]
+        + ["--out", str(tmp_path / "gguf")]
+    )
+    err = capsys.readouterr().err
+    assert code == 1 and "(config.json)" in err and "ne les rejouent" in err
+
+
+@pytest.mark.parametrize(
+    ("path", "ignored"),
+    [
+        (".cache/huggingface/download/x.metadata", True),
+        (r".cache\huggingface\x.lock", True),
+        (".cachefoo/x", False),
+        ("a/.cache/x", False),
+        (r"a\.cache\x", False),
+        (".cache/../config.json", False),
+        (r".cache\..\config.json", False),
+        ("config.json", False),
+        (None, False),
+    ],
+)
+def test_is_ignored_file_only_ignores_the_top_level_cache(path, ignored):
+    assert freeze.is_ignored_file(path) is ignored
