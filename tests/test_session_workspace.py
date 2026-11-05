@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -133,6 +134,8 @@ def test_settings_json(ws):
         "Bash(*PYTHONPATH*)",
         "Bash(*session-open*)",
         "Bash(*session-freeze*)",
+        "Bash(*session-unlock*)",
+        "PowerShell(*session-unlock*)",
         "PowerShell(Get-Content *)",
         "PowerShell(Get-ChildItem *)",
         "PowerShell(Select-String *)",
@@ -477,8 +480,11 @@ def test_script_outside_scripts_dir_refused(ws):
 
 def test_frozen_or_locked_session_refuses_scripts(ws):
     (ws / "scripts" / "ok.py").write_text("print(1)", encoding="utf-8")
-    (session(ws) / harness.LOCK_FILE).write_text("", encoding="utf-8")
-    with pytest.raises(harness.HarnessError, match="un lot tourne"):
+    (session(ws) / harness.LOCK_FILE).write_text(
+        json.dumps({"pid": os.getpid(), "acquired_at": "2026-11-05T10:00:00+00:00"}),
+        encoding="utf-8",
+    )
+    with pytest.raises(harness.HarnessError, match="un lot tourne déjà"):
         script_runner.run_script("scripts/ok.py", "s1", workspace=ws)
     (session(ws) / harness.LOCK_FILE).unlink()
     harness.update_state(session(ws), frozen=True)

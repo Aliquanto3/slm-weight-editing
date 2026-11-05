@@ -45,7 +45,8 @@ DENIED_CMDLETS = (
 # affectation de variable en tête, contrairement à une règle allow).
 DENIED_ANYWHERE = (
     "PYTHONPATH PYTHONHOME PYTHONSTARTUP UV_ --project --directory heldout slm-quality-bench "
-    "session-open session-freeze session-workspace apply-diff audit-session state.json "
+    "session-open session-freeze session-unlock session-workspace apply-diff audit-session "
+    "state.json "
     "journal.jsonl "
     "registry.jsonl session.lock workspace.json SymbolicLink Junction HardLink"
 ).split()

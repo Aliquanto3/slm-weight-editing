@@ -229,7 +229,7 @@ def freeze_session(
             if attempt == _FREEZE_RETRIES - 1:
                 raise FreezeError(
                     f"un lot tourne encore après {_FREEZE_RETRIES} essais ; gel non posé "
-                    f"(attendre la fin du lot, ou supprimer {harness.LOCK_FILE} s'il est périmé)"
+                    f"(attendre la fin du lot ; verrou orphelin : Anaël lance session-unlock)"
                 ) from exc
             time.sleep(_FREEZE_DELAY)
             continue

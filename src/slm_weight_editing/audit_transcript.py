@@ -42,6 +42,7 @@ RULES = {
     "harnais-modifie": "modification du harnais, de l'environnement ou des réglages de séance",
     "ouverture-seance": "ouverture de séance par l'agent (réservée à Anaël)",
     "gel-seance": "gel de séance par l'agent (réservé à Anaël)",
+    "deverrouillage-seance": "déverrouillage de séance par l'agent (réservé à Anaël)",
     "commande-hors-liste": "commande hors des trois commandes de l'espace de séance",
     "environnement": "affectation de variable d'environnement devant une commande",
     "lien": "création de lien symbolique, de jonction ou de lien physique",
@@ -169,6 +170,7 @@ _CLI_IMPORT = re.compile(
 )
 _OPEN = re.compile(r"session-open|open_session|open-session")
 _FREEZE = re.compile(r"session-freeze|freeze_session")
+_UNLOCK = re.compile(r"session-unlock|unlock_session")
 
 
 @dataclass(frozen=True)
@@ -269,9 +271,16 @@ def _check_code(text: str, tool: str, shell: bool) -> list[tuple[str, str]]:
         found.append(("ouverture-seance", _OPEN.search(norm).group(0)))
     if _FREEZE.search(norm):
         found.append(("gel-seance", _FREEZE.search(norm).group(0)))
+    if _UNLOCK.search(norm):
+        found.append(("deverrouillage-seance", _UNLOCK.search(norm).group(0)))
     for m in _CLI.finditer(norm):
         sub = m.group(1)
-        if sub not in ALLOWED_SUBCOMMANDS and not _OPEN.search(sub) and not _FREEZE.search(sub):
+        if (
+            sub not in ALLOWED_SUBCOMMANDS
+            and not _OPEN.search(sub)
+            and not _FREEZE.search(sub)
+            and not _UNLOCK.search(sub)
+        ):
             found.append(("commande-hors-liste", f"sous-commande « {sub or '(aucune)'} »"))
     for m in _CLI_IMPORT.finditer(norm):
         if m.group(1):
