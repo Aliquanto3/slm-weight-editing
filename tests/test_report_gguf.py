@@ -151,7 +151,9 @@ def test_modelfile_lists_template_system_and_stop(tmp_path):
 def test_modelfile_bytes_have_no_added_cr_but_keep_template_cr(tmp_path):
     # Octets exacts (LF) sous tout OS ; le CR du gabarit d'origine est conservé.
     s = build(tmp_path, template="a\r\nb\n{{ .Prompt }}", system="Sois bref.")
-    raw = run(s, tmp_path / "out").modelfile.read_bytes()
+    result = run(s, tmp_path / "out")
+    raw = result.modelfile.read_bytes()
+    assert b"\r" not in result.diff.read_bytes() and b"\r" not in result.fidelity.read_bytes()
     assert raw.count(b"\r") == 1
     assert b'TEMPLATE """a\r\nb\n{{ .Prompt }}"""\nSYSTEM """Sois bref."""\n' in raw
 

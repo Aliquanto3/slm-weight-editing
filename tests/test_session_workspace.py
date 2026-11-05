@@ -741,7 +741,7 @@ def test_limits_defaults_and_creation(tmp_path, base):
     )
     consigne = (ws / "CONSIGNE.md").read_text("utf-8")
     assert "15 min" in consigne and "60 min" in consigne and "4 threads" in consigne
-    assert "runs/<horodatage>-<script>.log" in consigne and "<SCRIPT_" not in consigne
+    assert "runs/HORODATAGE-SCRIPT.log" in consigne and "<SCRIPT_" not in consigne
     assert "<SCRIPT_" not in (ws / "CLAUDE.md").read_text("utf-8")
 
 
