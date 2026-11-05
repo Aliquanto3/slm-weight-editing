@@ -20,6 +20,7 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 - Fichiers d'état du run : jamais dans une PR de story, PR `chore/etat-run-*` à part.
 - Suite complète : la CI de branche (trois OS) sert de porte de fusion. Attente : `gh run watch <id> --interval 60`.
 - Aucun Ollama, aucun téléchargement de modèle, aucune séance d'édition lancés par un agent.
+- GPU interdit pendant ce run (consigne d'Anaël du 2026-11-05, GPU utilisé ailleurs) : aucun calcul CUDA, tests et sondes sur CPU seulement, sauf instruction contraire d'Anaël.
 - Heure du journal prise par `date`. `uv run python`, jamais `python` nu.
 
 ## Sessions autorisées à modifier le périmètre
@@ -45,3 +46,66 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 ## Journal
 
 - 2026-11-05 21:32 · run · décision · run lancé sur consigne d'Anaël (2.1, 2.2, 2.3, 2.7 ; arrêts avant 2.4, 2.5, 2.6, 2.8 et après 2.7) ; aucune PR ouverte, aucune branche en cours · 7152600
+- 2026-11-05 21:37 · run · fusion · #18 fusionnée (spec harnais v2 et état du run), MERGED vérifié · d4fa5ab
+- 2026-11-05 21:37 · 2.1 · dev · lancé (dev-story Sonnet, worktree wt-2-1, feat/verrou-pid) · —
+- 2026-11-05 21:37 · 2.7 · dev · lancé (dev-story Sonnet, worktree wt-2-7, exp/essai-output-weight) · —
+- 2026-11-05 21:42 · 2.7 · dev · fini, sous-commande gguf-add-output, 7 tests, doc docs/essai-output-weight.md, suite verte · 8e149f9
+- 2026-11-05 21:42 · 2.7 · second-avis · lancé (Haiku) · —
+- 2026-11-05 21:43 · 2.1 · dev · fini, pid_alive (ctypes sous Windows), session-unlock, ~10 tests, suite verte · 6d10a23
+- 2026-11-05 21:43 · 2.1 · second-avis · lancé (Haiku) · —
+- 2026-11-05 21:44 · 2.7 · second-avis · 1 high (doc : Modelfile sans PARAMETERS/RENDERER/PARSER de l'officiel, presence_penalty 1.5 fausserait l'essai), 2 low ; code du GGUF sondé sans défaut · —
+- 2026-11-05 21:44 · 2.7 · review · passe 1 lancée (Opus) · —
+- 2026-11-05 21:46 · 2.1 · second-avis · 4 medium (retrait sans contrôle d'identité, verrou illisible retiré sans vivacité, journal avant unlink, écriture hors try), 5 low · —
+- 2026-11-05 21:46 · 2.1 · review · passe 1 lancée (Opus) · —
+- 2026-11-05 21:49 · 2.7 · review · passe 1 : 1 Important corrigé (Modelfiles essai et témoin fidèles à l'officiel), 2 low corrigés ; vérifié sur le blob réel en lecture seule (+270 172 192 octets, 537 tenseurs) · 6652e09
+- 2026-11-05 21:49 · 2.7 · PR · #19 ouverte · 6652e09
+- 2026-11-05 21:49 · 2.7 · review · passe 2 lancée (correctif de la passe 1) · —
+- 2026-11-05 21:51 · 2.1 · review · passe 1 : 4 Important corrigés (retrait par le seul porteur, illisible < 60 s refusé, journal après retrait, écriture ratée), 4 low corrigés, 2 rejetés (comme la v1) · c648bd1
+- 2026-11-05 21:51 · 2.1 · PR · #20 ouverte · c648bd1
+- 2026-11-05 21:51 · 2.1 · review · passe 2 lancée · —
+- 2026-11-05 21:53 · 2.7 · review · passe 2 : 0 Important, 2 low corrigés (nettoyage si un Modelfile échoue, flux simplifié), 1 reporté (Modelfile en CRLF sous Windows par render_modelfile, préexistant : à vérifier par Anaël avec ollama show) · f859151
+- 2026-11-05 21:57 · 2.7 · CI · verte sur les trois OS · f859151
+- 2026-11-05 21:57 · 2.7 · fusion · #19 fusionnée, MERGED vérifié · 378f9ec
+- 2026-11-05 21:57 · 2.1 · review · passe 2 : 0 Important, 5 low rejetés ou reportés (dégradations sûres) ; porteur tué vérifié en réel sous Windows · c3aeade
+- 2026-11-05 22:00 · 2.1 · CI · verte sur les trois OS (avec 2.7 fusionnée) · c3aeade
+- 2026-11-05 22:01 · 2.1 · fusion · #20 fusionnée, MERGED vérifié · 6de87e6
+- 2026-11-05 22:01 · 2.2 · dev · lancé (dev-story Sonnet, worktree wt-2-2, feat/run-script-maitrise) · —
+- 2026-11-05 22:07 · run · décision · GPU interdit pour tout le run (consigne d'Anaël), transmise aux agents en cours · —
+- 2026-11-05 22:10 · 2.2 · dev · fini, 14 tests, suite verte sur CPU ; plafond vérifié par l'environnement de l'enfant (threadpoolctl absent), arbre tué testé sous POSIX seulement · ea78b64
+- 2026-11-05 22:10 · 2.2 · second-avis · lancé (Haiku) · —
+- 2026-11-05 22:13 · run · décision · Anaël part pour la nuit (« continue en autonomie sur tout ce que tu peux ») : 2.2 et 2.3 jusqu'à fusion ; points d'arrêt maintenus (2.4, 2.5, 2.6, 2.8 non codées) ; à la place, fiches de spec de 2.4, 2.5, 2.6 et 2.8 rédigées pour sa relecture du matin (PR docs à part, non fusionnée sans lui) · —
+- 2026-11-05 22:13 · 2.2 · second-avis · 1 medium (délai inf accepté : Timer en OverflowError, script sans délai), 6 low (plafond de threads non mesuré, sha256 des logs non audité, Popen avant ouverture du log…) · —
+- 2026-11-05 22:13 · 2.2 · review · passe 1 lancée (Opus) · —
+- 2026-11-05 22:14 · 2.4-2.8 · décision · fiches de spec 2.4, 2.5, 2.6, 2.8 lancées (Opus, worktree wt-fiches, docs/fiches-harnais-v2), PR à relire par Anaël, non fusionnée · —
+- 2026-11-05 22:19 · 2.2 · review · passe 1 : 1 Important corrigé (délais finis bornés à 24 h), 4 low corrigés (plafond OpenBLAS mesuré, arbre tué testé sur 3 OS, log ouvert avant Popen, snapshot), 1 écarté, 1 préexistant reporté · 2c5aacd
+- 2026-11-05 22:19 · 2.2 · PR · #21 ouverte · 2c5aacd
+- 2026-11-05 22:19 · 2.2 · review · passe 2 lancée · —
+- 2026-11-05 22:20 · 2.3 · dev · lancé (dev-story Sonnet, worktree wt-2-3, feat/run-batch-thinking empilée sur feat/run-script-maitrise 2c5aacd) · —
+- 2026-11-05 22:23 · 2.2 · review · passe 2 : 0 Important, 2 low corrigés (log vide si Popen échoue, arbre tué sur interruption), 1 rejeté · d4c15a8
+- 2026-11-05 22:27 · 2.2 · CI · verte sur les trois OS · d4c15a8
+- 2026-11-05 22:27 · 2.2 · fusion · #21 fusionnée, MERGED vérifié · c26a27c
+- 2026-11-05 22:27 · 2.4-2.8 · PR · #22 ouverte (fiches 2.4, 2.5, 2.6, 2.8 avec questions pour Anaël ; doc officielle des hooks citée pour 2.5), non fusionnée · d136357
+- 2026-11-05 22:27 · 2.3 · dev · fini, une douzaine de tests, suite verte sur CPU ; workspace.py et audit inchangés (règles par sous-commande) · f0af8f8
+- 2026-11-05 22:27 · 2.3 · rebase · sur main c26a27c sans conflit · 1f266c4
+- 2026-11-05 22:27 · 2.3 · second-avis · lancé (Haiku) · —
+- 2026-11-05 22:30 · 2.3 · second-avis · 2 medium (« --thinking on|off » de la consigne = chaînage shell refusé par l'audit ; raw compté « on » sans gabarit), 4 low (dont « mode fixé par séance », écarté : CAP-2 veut alterner) · —
+- 2026-11-05 22:30 · 2.3 · review · passe 1 lancée (Opus) · —
+- 2026-11-05 22:34 · 2.3 · review · passe 1 : 2 Important corrigés (consigne sans « on|off » testée par check_shell ; mode appliqué None en raw), 3 low corrigés, 1 écarté · e6f1ad3
+- 2026-11-05 22:34 · 2.3 · PR · #23 ouverte · e6f1ad3
+- 2026-11-05 22:34 · 2.3 · review · passe 2 lancée · —
+- 2026-11-05 22:40 · 2.3 · review · passe 2 : 1 Important corrigé (« <MODE> » recopié = redirection, faute d'audit : deux lignes complètes), 1 low corrigé, 1 préexistant reporté (« data/<fichier> » et « scripts/<nom>.py » ont le même défaut) ; pas de passe 3, correctif de doc relu par l'orchestrateur · 813b1fc
+- 2026-11-05 22:43 · 2.3 · CI · verte sur les trois OS · 813b1fc
+- 2026-11-05 22:43 · 2.3 · fusion · #23 fusionnée, MERGED vérifié · a850122
+- 2026-11-05 22:44 · fix-lf · dev · lancé (dev-story Sonnet, wt-fix-lf, fix/modelfile-lf-consigne) : Modelfiles en LF sous Windows (avant l'essai Ollama d'Anaël) et chevrons recopiables de la consigne · —
+- 2026-11-05 22:47 · fix-lf · dev · fini, Modelfiles en LF, gabarits FICHIER/NOM, test check_shell étendu à CONSIGNE et CLAUDE rendus, suite verte · 135c3e4
+- 2026-11-05 22:47 · fix-lf · second-avis · lancé (Haiku) · —
+- 2026-11-05 22:49 · run · CI · main verte sur les trois OS après la fusion de 2.3 · a850122
+- 2026-11-05 22:49 · fix-lf · second-avis · 2 medium (test vide pour CLAUDE.md ; « run-batch | session-status | run-script ... » recopiable dans CLAUDE.md), 5 low (chevrons en prose, doc, diff.json en CRLF…) · —
+- 2026-11-05 22:49 · fix-lf · review · passe 1 lancée (Opus) · —
+- 2026-11-05 22:53 · fix-lf · review · passe 1 : 2 Important corrigés (test étendu au code en ligne, CLAUDE.md en quatre commandes complètes), 4 low corrigés, 1 écarté ; pas de passe 2, correctif de doc relu par l'orchestrateur · 7857105
+- 2026-11-05 22:57 · fix-lf · PR · #24 ouverte · 7857105
+- 2026-11-05 22:57 · fix-lf · CI · verte sur les trois OS · 7857105
+- 2026-11-05 22:57 · fix-lf · fusion · #24 fusionnée, MERGED vérifié · a7bd7b4
+- 2026-11-05 23:00 · run · CI · main verte sur les trois OS après la dernière fusion · a7bd7b4
+- 2026-11-05 23:00 · run · ménage · worktrees et branches locales fusionnées retirés (wt-fiches gardé pour la PR #22) ; branches distantes soumises à Anaël · a7bd7b4
+- 2026-11-05 23:00 · run · attente humaine · essai Ollama de 2.7 (docs/essai-output-weight.md) ; relecture des fiches 2.4, 2.5, 2.6, 2.8 (PR #22) · a7bd7b4
