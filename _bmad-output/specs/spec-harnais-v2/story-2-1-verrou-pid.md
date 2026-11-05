@@ -32,3 +32,14 @@ title: Verrou de séance avec PID et session-unlock (CAP-7)
 - Nit, low, second avis 9 : tests manquants. Corrigé : branche POSIX de `pid_alive`, écriture ratée, ordre journal/retrait, sortie après reprise, PID hors bornes.
 - Nit, low, revue : la CLI affichait « PID None mort » pour un verrou illisible. Corrigé.
 - Complexité : 0 constat.
+
+### Passe 2 (2026-11-05, SHA revu c648bd1)
+
+Relu : le seul correctif c648bd1 ; base à jour sur `origin/main` (d4fa5ab). Porteur tué vérifié en réel (sous-processus tué sous Windows) : verrou laissé, PID mort, refus « verrou orphelin … session-unlock » ; retrait par `session-unlock` couvert par les tests.
+
+- Nit, low, revue : comparaison lecture-puis-`unlink` à la sortie du porteur (TOCTOU). Rejeté : un verrou lisible et vivant ne peut être retiré que par une suppression à la main ; la fenêtre est de quelques microsecondes.
+- Nit, low, revue : deux `session-unlock` simultanés pourraient retirer le verrou d'un lot pris entre les deux. Rejeté : commande d'Anaël seul, à la main ; fenêtre négligeable.
+- Nit, low, revue : retrait après échec d'écriture. Juste : le fichier vient d'être créé par `O_EXCL`, nul autre ne peut l'avoir remplacé (`session-unlock` refuse un illisible de moins de 60 s).
+- Nit, low, revue : si la relecture de son propre verrou échoue à la sortie (blocage passager sous Windows), le verrou reste et demande `session-unlock`. Reporté : dégradation sûre (refus, pas de double lot), à reprendre si un cas réel apparaît.
+- Nit, low, revue : âge par `st_mtime` ; sous Windows (NTFS), l'heure de dernière écriture d'un fichier vide vaut sa création, d'un fichier partiel sa dernière écriture : le seuil de 60 s tient. Horloge décalée (partage réseau) : âge négatif, refus prudent. Rien à corriger.
+- Complexité : 0 constat.
