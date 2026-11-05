@@ -28,6 +28,7 @@ from slm_weight_editing.report_gguf import (
     ReportError,
     ShaMismatchError,
     gguf_name,
+    quantize_tensor,
     report_gguf,
 )
 
@@ -406,9 +407,11 @@ def test_report_embed_row_changes_only_that_rows_blocks(tmp_path):
     row_bytes = COLS // 32 * block
     changed = [i for i in range(len(official)) if official[i] != new[i]]
     start = info.offset + 3 * row_bytes
-    assert changed and start <= min(changed) and max(changed) < start + row_bytes
-    # Le bloc 1 de la ligne 3 (colonnes 32 à 63) porte seul la modification.
-    assert min(changed) >= start + block
+    # Le bloc 1 de la ligne 3 (colonnes 32 à 63) porte seul la modification : tout octet hors de
+    # ce bloc est identique à l'officiel, et le bloc a bien changé.
+    lo, hi = start + block, start + 2 * block
+    assert changed and lo <= min(changed) and max(changed) < hi
+    assert new[:lo] == official[:lo] and new[hi:] == official[hi:]
     assert len(new) == len(official)
     diff = json.loads(result.diff.read_text("utf-8"))
     assert [t["gguf_name"] for t in diff["tensors"]] == ["token_embd.weight"]
@@ -447,3 +450,95 @@ def test_unsupported_tensor_is_still_refused(tmp_path):
 
 def sha256_of(arr):
     return hashlib.sha256(arr.tobytes()).hexdigest()
+
+
+def embed_sha(tmp_path):
+    store, official_path, ckpt, base_dir, edited = build_embed(tmp_path)
+    return store, ckpt, base_dir, {EMBED: sha256_of(edited)}
+
+
+def test_report_embed_without_base_checkpoint_is_refused(tmp_path):
+    store, ckpt, _, expected = embed_sha(tmp_path)
+    with pytest.raises(ReportError, match="--base-checkpoint requis"):
+        report_gguf(ckpt, tmp_path / "o", store=store, expected_sha256=expected)
+    assert not (tmp_path / "o").exists()
+
+
+@pytest.mark.parametrize(
+    "config",
+    [{"tie_word_embeddings": False}, {"text_config": {"tie_word_embeddings": False}}],
+)
+def test_report_embed_refuses_untied_config(tmp_path, config):
+    store, ckpt, base_dir, expected = embed_sha(tmp_path)
+    (ckpt / "config.json").write_text(json.dumps(config), "utf-8")
+    with pytest.raises(ReportError, match="tie_word_embeddings: false"):
+        report_gguf(
+            ckpt, tmp_path / "o", store=store, base_checkpoint=base_dir, expected_sha256=expected
+        )
+
+
+def test_report_embed_accepts_tied_config(tmp_path):
+    store, ckpt, base_dir, expected = embed_sha(tmp_path)
+    config = {"tie_word_embeddings": True, "text_config": {"tie_word_embeddings": True}}
+    (ckpt / "config.json").write_text(json.dumps(config), "utf-8")
+    report_gguf(
+        ckpt, tmp_path / "o", store=store, base_checkpoint=base_dir, expected_sha256=expected
+    )
+
+
+def test_report_embed_refuses_a_distinct_lm_head(tmp_path):
+    store, official_path, ckpt, base_dir, edited = build_embed(tmp_path)
+    write_safetensors(ckpt / "model.safetensors", {EMBED: edited, "lm_head.weight": edited})
+    with pytest.raises(ReportError, match="lm_head.weight distinct"):
+        report_gguf(
+            ckpt,
+            tmp_path / "o",
+            store=store,
+            base_checkpoint=base_dir,
+            expected_sha256={EMBED: sha256_of(edited)},
+        )
+
+
+def test_report_embed_refuses_a_gguf_with_output_weight(tmp_path):
+    store, official_path, ckpt, base_dir, edited = build_embed(tmp_path)
+    q8 = q8_0_reference(edited)
+    gguf_path = write_gguf(tmp_path / "o2.gguf", {"token_embd.weight": q8, "output.weight": q8})
+    store2 = write_store(tmp_path / "store2", gguf_path)
+    with pytest.raises(ReportError, match="output.weight distinct"):
+        report_gguf(
+            ckpt,
+            tmp_path / "o",
+            store=store2,
+            base_checkpoint=base_dir,
+            expected_sha256={EMBED: sha256_of(edited)},
+        )
+
+
+def test_mit_path_does_not_use_embed_tokens_as_a_witness(tmp_path):
+    """Chemin du lot 0 : un token_embd officiel non reproductible ne bloque pas le report."""
+    s = build(tmp_path)
+    rng = np.random.default_rng(3)
+    embed = to_bf16(rng.normal(0, 0.05, (ROWS, COLS)).astype(np.float32))
+    official = {f"blk.{i}.ffn_down.weight": q8_0_reference(s.base[hf_name(i)]) for i in range(3)}
+    other = to_bf16(rng.normal(0, 0.05, (ROWS, COLS)).astype(np.float32))
+    official["token_embd.weight"] = q8_0_reference(other)  # ne correspond pas à `embed`
+    gguf_path = write_gguf(tmp_path / "o3.gguf", official)
+    store = write_store(tmp_path / "store3", gguf_path)
+    write_safetensors(s.checkpoint / "model-00003.safetensors", {EMBED: embed})
+    result = report_gguf(s.checkpoint, tmp_path / "o", store=store, expected_sha256=s.expected_sha)
+    fidelity = json.loads(result.fidelity.read_text("utf-8"))
+    assert fidelity["ok"]
+    assert "token_embd.weight" not in [t["gguf_name"] for t in fidelity["tensors"]]
+
+
+def test_quantize_tensor_by_chunks_matches_a_single_pass(tmp_path, monkeypatch):
+    from slm_weight_editing import report_gguf as mod
+    from slm_weight_editing.safetensors_file import open_checkpoint
+
+    rng = np.random.default_rng(5)
+    values = to_bf16(rng.normal(0, 0.05, (ROWS, COLS)).astype(np.float32))
+    st = open_checkpoint(write_safetensors(tmp_path / "m.safetensors", {EMBED: values}))[EMBED]
+    whole = quantize_q8_0(bf16_bytes_to_f32(values.tobytes()), "f32")
+    monkeypatch.setattr(mod, "_QUANT_CHUNK_BLOCKS", 3)  # tranches qui coupent les lignes
+    assert quantize_tensor(st, "f32") == whole
+    assert quantize_tensor(st, "f16") == quantize_q8_0(bf16_bytes_to_f32(values.tobytes()), "f16")

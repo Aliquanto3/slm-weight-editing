@@ -686,3 +686,21 @@ def test_cache_entry_does_not_hide_another_changed_file(tmp_path, capsys):
     )
     err = capsys.readouterr().err
     assert code == 1 and "(config.json)" in err and "ne les rejouent" in err
+
+
+@pytest.mark.parametrize(
+    ("path", "ignored"),
+    [
+        (".cache/huggingface/download/x.metadata", True),
+        (r".cache\huggingface\x.lock", True),
+        (".cachefoo/x", False),
+        ("a/.cache/x", False),
+        (r"a\.cache\x", False),
+        (".cache/../config.json", False),
+        (r".cache\..\config.json", False),
+        ("config.json", False),
+        (None, False),
+    ],
+)
+def test_is_ignored_file_only_ignores_the_top_level_cache(path, ignored):
+    assert freeze.is_ignored_file(path) is ignored

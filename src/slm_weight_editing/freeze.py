@@ -131,8 +131,14 @@ IGNORED_DIR = ".cache"
 
 
 def is_ignored_file(path: object) -> bool:
-    """Métadonnées de téléchargement HF (`.cache/...`) : jamais une modification de la séance."""
-    return isinstance(path, str) and path.replace("\\", "/").split("/", 1)[0] == IGNORED_DIR
+    """Métadonnées de téléchargement HF (`.cache/...`) : jamais une modification de la séance.
+
+    Un chemin qui contient `..` n'est jamais ignoré (`.cache/../config.json` sortirait du cache).
+    """
+    if not isinstance(path, str):
+        return False
+    parts = path.replace("\\", "/").split("/")
+    return parts[0] == IGNORED_DIR and ".." not in parts
 
 
 def relevant_files(files: list[dict]) -> list[dict]:
