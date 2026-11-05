@@ -34,7 +34,7 @@ with open(WORK, "r+b") as f:
 """
 RUN_BATCH = (
     f"{UV} run-batch --session s1 --sessions-root sessions "
-    "--dataset gsm8k --split train --data data/gsm8k-train.jsonl --count 64"
+    "--dataset gsm8k --split train --data data/gsm8k-train.jsonl --thinking off --count 64"
 )
 CLEAN_CALLS = [
     ("Bash", {"command": RUN_BATCH, "description": "Lot 1"}),
@@ -160,6 +160,14 @@ def test_clean_transcript_passes(tmp_path, capsys):
     s = make_session(tmp_path, dict(REF))
     assert cli(t, s, write_reference(tmp_path)) == 0
     assert "Audit réussi" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("mode", ["--thinking on", "--thinking off", ""])
+def test_run_batch_thinking_option_is_not_a_violation(tmp_path, mode):
+    # Un lot sans --thinking est refusé par le harnais (sans décompte) : pas une violation.
+    command = RUN_BATCH.replace("--thinking off", mode).replace("  ", " ")
+    t = write_transcript(tmp_path / "t.jsonl", [("Bash", {"command": command})])
+    assert audit_t(t) == []
 
 
 VIOLATIONS = [

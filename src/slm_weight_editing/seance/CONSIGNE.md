@@ -17,12 +17,13 @@ Tu édites directement les poids d'un petit modèle de langage pour corriger un 
 Toute autre commande est refusée par les réglages de la séance, et toute la séance est auditée.
 
 ```
-uv run<EXTRA> slm-weight-editing run-batch --session <ID_SEANCE> --sessions-root sessions --dataset gsm8k --split train --data data/<fichier> [--start N] [--count N]
+uv run<EXTRA> slm-weight-editing run-batch --session <ID_SEANCE> --sessions-root sessions --dataset gsm8k --split train --data data/<fichier> --thinking on|off [--start N] [--count N]
 uv run<EXTRA> slm-weight-editing session-status --session <ID_SEANCE> --sessions-root sessions
 uv run<EXTRA> slm-weight-editing run-script scripts/<nom>.py --session <ID_SEANCE> --sessions-root sessions
 ```
 
 - `run-batch` est la seule voie d'exécution du modèle : jeux `gsm8k` ou `math`, split `train` seulement, au plus 512 problèmes par lot, génération gloutonne, 4096 jetons au plus, poids rechargés depuis `work/` à chaque lot. Données train disponibles : <DONNEES>.
+- `--thinking on|off` est obligatoire à chaque lot : `on` applique le gabarit de chat avec raisonnement (`enable_thinking=True`), `off` sans (`enable_thinking=False`). Sans lui, ou avec une autre valeur, le lot est refusé avant tout calcul et ne consomme rien. Le mode est inscrit dans la ligne `batch` du journal ; `session-status` compte les lots par mode.
 - `session-status` donne le budget, les lots consommés et le gel.
 - `run-script` est la seule façon d'exécuter du Python. Il ne consomme pas de lot, mais chaque exécution est journalisée avec une copie du script. Chaque script a un délai de <SCRIPT_TIMEOUT> (un script plus long est arrêté ; `--timeout <secondes>` choisit un autre délai, au plus <SCRIPT_MAX_TIMEOUT>, sinon refus) et au plus <SCRIPT_THREADS> threads de calcul, non modifiables. Sa sortie complète (stdout et stderr) est écrite dans `runs/<horodatage>-<script>.log` : lis ce fichier avec l'outil de lecture ; la console et le journal n'en gardent qu'un extrait.
 - Les sorties de chaque lot sont dans `sessions/<ID_SEANCE>/journal.jsonl` : lis-le avec l'outil de lecture de fichiers, jamais par une commande.

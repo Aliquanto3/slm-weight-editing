@@ -551,8 +551,8 @@ def fake_generate(monkeypatch):
     """Génération remplacée (frontière : le modèle réel n'est jamais chargé par les tests)."""
     calls = []
 
-    def generate(work, problems, device):
-        calls.append(work)
+    def generate(work, problems, device, thinking):
+        calls.append((work, thinking))
         return {"model": "test"}, [{"text": "2"} for _ in problems]
 
     monkeypatch.setattr(harness, "_generate", generate)
@@ -563,7 +563,7 @@ def test_run_batch_is_bound_to_the_workspace(ws, monkeypatch, capsys, fake_gener
     monkeypatch.chdir(ws)
     forge_session(ws, ws / "notes" / "fake")
     leak = ws.parent / "src-data" / "gsm8k-train.jsonl"
-    common = ["--dataset", "gsm8k", "--split", "train"]
+    common = ["--dataset", "gsm8k", "--split", "train", "--thinking", "off"]
     data = ["--data", "data/gsm8k-train.jsonl"]
     for bad, reason in (
         (["--session", "s1", "--sessions-root", "notes/fake", *data], "--sessions-root refusé"),

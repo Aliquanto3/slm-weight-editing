@@ -22,6 +22,12 @@ from slm_weight_editing.safetensors_file import open_checkpoint
 REV = "rev-synthetique"
 
 
+def run_batch(*args, **kwargs):
+    """Lot en mode raisonnement `off` sauf précision (le mode est obligatoire)."""
+    kwargs.setdefault("thinking", "off")
+    return harness.run_batch(*args, **kwargs)
+
+
 def sha(arr: np.ndarray) -> str:
     return hashlib.sha256(arr.tobytes()).hexdigest()
 
@@ -115,7 +121,7 @@ def test_freeze_is_final_and_harness_refuses_batches(sess, tmp_path):
     data.parent.mkdir()
     data.write_text(json.dumps({"id": "1", "question": "q", "split": "train"}) + "\n", "utf-8")
     with pytest.raises(HarnessError, match="séance gelée"):
-        harness.run_batch("s1", "gsm8k", "train", data, sessions_root=sess["root"])
+        run_batch("s1", "gsm8k", "train", data, sessions_root=sess["root"])
     assert harness.used_batches(sess["dir"]) == 0
     with pytest.raises(HarnessError, match="ne se dégèle pas"):
         harness.update_state(sess["dir"], frozen=False)
