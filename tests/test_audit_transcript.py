@@ -267,6 +267,12 @@ VIOLATIONS = [
     ("Write", {"file_path": "f.py", "content": "freeze.freeze_session('s1', 'b')"}, "gel-seance"),
     (
         "Bash",
+        {"command": "uv run slm-weight-editing session-unlock --session s1"},
+        "deverrouillage-seance",
+    ),
+    ("Write", {"file_path": "f.py", "content": "h.unlock_session('s1')"}, "deverrouillage-seance"),
+    (
+        "Bash",
         {"command": "uv run slm-weight-editing apply-diff --diff d --original b --out o"},
         "commande-hors-liste",
     ),

@@ -44,6 +44,13 @@ STATE_FILE = "state.json"
 JOURNAL_FILE = "journal.jsonl"
 WORK_DIR = "work"
 LOCK_FILE = "session.lock"
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_ERROR_ACCESS_DENIED = 5
+_STILL_ACTIVE = 259
+_PID_MAX = 2**31 - 1
+# Âge minimal (s) d'un verrou illisible avant que session-unlock le retire : un porteur vivant
+# peut être entre la création du fichier et l'écriture de son contenu.
+_UNREADABLE_LOCK_MIN_AGE = 60.0
 REGISTRY_FILE = "registry.jsonl"
 # Espace de séance (story 5) : écrit par `session-workspace`, il fixe séance, racine et données
 # des commandes lancées depuis l'espace (l'éditeur ne choisit ni une autre séance ni d'autres
@@ -142,19 +149,130 @@ def _write_state(directory: Path, state: SessionState) -> None:
             time.sleep(_REPLACE_DELAY)
 
 
+def pid_alive(pid: int) -> bool:
+    """Le processus `pid` existe-t-il ? Sans dépendance, sous Windows comme sous POSIX."""
+    if pid <= 0 or pid > _PID_MAX:
+        return False
+    if sys.platform == "win32":
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+        kernel32.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, 0, pid)
+        if not handle:
+            return ctypes.get_last_error() == _ERROR_ACCESS_DENIED
+        try:
+            code = ctypes.c_uint32()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return True
+            return code.value == _STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def read_lock(lock: Path) -> dict | None:
+    """Contenu `{"pid", "acquired_at"}` du verrou, None s'il est illisible (vide, corrompu)."""
+    try:
+        data = json.loads(lock.read_text("utf-8"))
+    except OSError, ValueError:
+        return None
+    if (
+        not isinstance(data, dict)
+        or type(data.get("pid")) is not int
+        or not 0 < data["pid"] <= _PID_MAX
+        or not isinstance(data.get("acquired_at"), str)
+    ):
+        return None
+    return data
+
+
+def _lock_refusal(lock: Path) -> str:
+    data = read_lock(lock)
+    if data is None:
+        return (
+            f"un lot tourne peut-être : {lock} est illisible (ancien format, vide ou corrompu) ; "
+            "seul Anaël peut le retirer, par `slm-weight-editing session-unlock`"
+        )
+    pid, since = data["pid"], data["acquired_at"]
+    if pid_alive(pid):
+        return f"un lot tourne déjà : le processus {pid} est vivant (verrou pris le {since})"
+    return (
+        f"verrou orphelin : le processus {pid} est mort (verrou pris le {since}) ; "
+        "seul Anaël peut le retirer, par `slm-weight-editing session-unlock`"
+    )
+
+
 @contextmanager
 def _session_lock(directory: Path):
-    """Verrou exclusif de séance : un lot ou un gel à la fois."""
+    """Verrou exclusif de séance : un lot ou un gel à la fois. Contient le PID et l'heure."""
     lock = directory / LOCK_FILE
     try:
         fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError as exc:
-        raise HarnessError(f"un lot tourne déjà (sinon supprimer {lock})") from exc
-    os.close(fd)
+        raise HarnessError(_lock_refusal(lock)) from exc
+    mine = {"pid": os.getpid(), "acquired_at": _now()}
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(mine, f)
+    except BaseException:
+        lock.unlink(missing_ok=True)
+        raise
     try:
         yield
     finally:
-        lock.unlink(missing_ok=True)
+        # Ne retire que son propre verrou : s'il a été retiré puis repris par un autre
+        # processus entre-temps, le verrou de ce dernier reste en place.
+        if read_lock(lock) == mine:
+            lock.unlink(missing_ok=True)
+
+
+def unlock_session(
+    session_id: str, sessions_root: str | Path = DEFAULT_SESSIONS_ROOT
+) -> dict | None:
+    """Retire le verrou d'une séance dont le processus est mort ; None s'il n'y en a pas.
+
+    Journalise une ligne `unlock` (PID retiré, heure). Refuse si le processus est vivant.
+    """
+    directory = session_dir(session_id, sessions_root)
+    read_state(directory)
+    lock = directory / LOCK_FILE
+    if not lock.exists():
+        return None
+    data = read_lock(lock)
+    if data is not None and pid_alive(data["pid"]):
+        raise HarnessError(
+            f"le processus {data['pid']} est vivant (verrou pris le {data['acquired_at']}) : "
+            "rien n'est retiré"
+        )
+    if data is None:
+        try:
+            age = time.time() - lock.stat().st_mtime
+        except FileNotFoundError:
+            return None
+        if age < _UNREADABLE_LOCK_MIN_AGE:
+            raise HarnessError(
+                f"verrou illisible pris il y a {age:.0f} s : un lot l'écrit peut-être encore ; "
+                f"rien n'est retiré (réessayer après {_UNREADABLE_LOCK_MIN_AGE:.0f} s)"
+            )
+    entry = {
+        "event": "unlock",
+        "pid": data["pid"] if data else None,
+        "lock_acquired_at": data["acquired_at"] if data else None,
+        "at": _now(),
+    }
+    lock.unlink(missing_ok=True)
+    _append_journal(directory, entry)
+    return entry
 
 
 def update_state(directory: str | Path, **changes: object) -> SessionState:
@@ -703,7 +821,14 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     st = sub.add_parser("session-status", help="budget, lots consommés et gel d'une séance")
     st.add_argument("--session", required=True)
     st.add_argument("--sessions-root", help=root_help)
-    for p in (op, rb, st):
+    ul = sub.add_parser(
+        "session-unlock",
+        help="retire le verrou orphelin d'une séance (processus mort) ; réservé à Anaël",
+        description="Refuse si le processus du verrou est vivant ; journalise une ligne unlock.",
+    )
+    ul.add_argument("--session", required=True)
+    ul.add_argument("--sessions-root", default=DEFAULT_SESSIONS_ROOT)
+    for p in (op, rb, st, ul):
         p.set_defaults(func=run)
 
 
@@ -735,6 +860,13 @@ def run(args: argparse.Namespace) -> int:
                 f"Lot {entry['batch']}/{entry['budget']} : {len(entry['problems'])} problèmes, "
                 f"reste {entry['remaining']} lots (appareil {entry['device']['device']})"
             )
+        elif args.command == "session-unlock":
+            entry = unlock_session(args.session, args.sessions_root)
+            if entry is None:
+                print(f"Séance {args.session} : aucun verrou à retirer")
+            else:
+                what = f"PID {entry['pid']} mort" if entry["pid"] else "verrou illisible"
+                print(f"Séance {args.session} : verrou retiré ({what}), ligne unlock journalisée")
         else:
             root = bind_workspace(args.session, args.sessions_root)
             directory = session_dir(args.session, root)

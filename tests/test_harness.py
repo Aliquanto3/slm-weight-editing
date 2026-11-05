@@ -10,6 +10,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
+import sys
+import time
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -458,10 +462,177 @@ def test_length_done_reason_at_fixed_cap(tmp_path, train_file):
 
 def test_lock_refuses_concurrent_batch(root, stop_ckpt, train_file):
     open_s(root, stop_ckpt)
-    (root / "s1" / "session.lock").write_text("", "utf-8")
-    with pytest.raises(HarnessError, match="un lot tourne déjà"):
+    write_lock(root / "s1", os.getpid())
+    with pytest.raises(HarnessError, match=rf"un lot tourne déjà.*{os.getpid()} est vivant"):
         harness.run_batch("s1", "gsm8k", "train", train_file, sessions_root=root)
     assert harness.read_state(root / "s1").used == 0
+
+
+def write_lock(directory, pid):
+    (directory / "session.lock").write_text(
+        json.dumps({"pid": pid, "acquired_at": "2026-11-05T10:00:00+00:00"}), "utf-8"
+    )
+
+
+def dead_pid():
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    return proc.pid
+
+
+def test_pid_alive_current_and_finished_child():
+    assert harness.pid_alive(os.getpid()) is True
+    assert harness.pid_alive(dead_pid()) is False
+    assert harness.pid_alive(0) is False
+
+
+def test_lock_holds_pid_and_time_then_is_removed(root, stop_ckpt):
+    open_s(root, stop_ckpt)
+    d = root / "s1"
+    with harness._session_lock(d):
+        data = json.loads((d / "session.lock").read_text("utf-8"))
+        assert set(data) == {"pid", "acquired_at"} and data["pid"] == os.getpid()
+        datetime.fromisoformat(data["acquired_at"])
+    assert not (d / "session.lock").exists()
+    harness.update_state(d, frozen=True)
+    assert not (d / "session.lock").exists()
+
+
+def test_lock_of_dead_process_is_refused_with_unlock_hint(root, stop_ckpt):
+    open_s(root, stop_ckpt)
+    pid = dead_pid()
+    write_lock(root / "s1", pid)
+    with pytest.raises(HarnessError, match=rf"{pid} est mort.*seul Anaël.*session-unlock"):
+        harness.update_state(root / "s1", frozen=True)
+
+
+@pytest.mark.parametrize("content", ["", "{", "[]", '{"pid": "x", "acquired_at": 1}'])
+def test_unreadable_lock_gives_explicit_refusal(root, stop_ckpt, content):
+    open_s(root, stop_ckpt)
+    (root / "s1" / "session.lock").write_text(content, "utf-8")
+    with pytest.raises(HarnessError, match="illisible.*seul Anaël"):
+        harness.update_state(root / "s1", frozen=True)
+
+
+def test_unlock_removes_dead_lock_and_journals_it(root, stop_ckpt):
+    open_s(root, stop_ckpt)
+    pid = dead_pid()
+    write_lock(root / "s1", pid)
+    entry = harness.unlock_session("s1", root)
+    assert not (root / "s1" / "session.lock").exists()
+    last = harness.read_journal(root / "s1")[-1]
+    assert last == entry
+    assert last["event"] == "unlock" and last["pid"] == pid
+    assert last["lock_acquired_at"] == "2026-11-05T10:00:00+00:00"
+    datetime.fromisoformat(last["at"])
+
+
+def test_unlock_removes_unreadable_lock(root, stop_ckpt):
+    open_s(root, stop_ckpt)
+    lock = root / "s1" / "session.lock"
+    lock.write_text("", "utf-8")
+    # Récent : un porteur l'écrit peut-être encore, rien n'est retiré ni journalisé.
+    before = harness.read_journal(root / "s1")
+    with pytest.raises(HarnessError, match="illisible.*rien n'est retiré"):
+        harness.unlock_session("s1", root)
+    assert lock.exists() and harness.read_journal(root / "s1") == before
+    old = time.time() - 3600
+    os.utime(lock, (old, old))
+    entry = harness.unlock_session("s1", root)
+    assert entry["pid"] is None and not lock.exists()
+
+
+def test_unlock_journals_only_after_removal(root, stop_ckpt, monkeypatch):
+    open_s(root, stop_ckpt)
+    write_lock(root / "s1", dead_pid())
+    before = harness.read_journal(root / "s1")
+
+    def refuse(self, missing_ok=False):
+        raise PermissionError("verrou ouvert ailleurs")
+
+    monkeypatch.setattr(Path, "unlink", refuse)
+    with pytest.raises(PermissionError):
+        harness.unlock_session("s1", root)
+    monkeypatch.undo()
+    assert (root / "s1" / "session.lock").exists()
+    assert harness.read_journal(root / "s1") == before
+
+
+def test_lock_release_keeps_a_lock_taken_over_by_another(root, stop_ckpt):
+    open_s(root, stop_ckpt)
+    d = root / "s1"
+    with harness._session_lock(d):
+        (d / "session.lock").unlink()
+        write_lock(d, 4242)
+    assert json.loads((d / "session.lock").read_text("utf-8"))["pid"] == 4242
+
+
+def test_failed_lock_write_leaves_no_lock(root, stop_ckpt, monkeypatch):
+    open_s(root, stop_ckpt)
+
+    def boom(*args, **kwargs):
+        raise OSError("disque plein")
+
+    monkeypatch.setattr(harness.json, "dump", boom)
+    with pytest.raises(OSError, match="disque plein"):
+        with harness._session_lock(root / "s1"):
+            pass
+    assert not (root / "s1" / "session.lock").exists()
+
+
+def test_pid_alive_posix_branch(monkeypatch):
+    monkeypatch.setattr(harness.sys, "platform", "linux")
+
+    def kill(pid, sig):
+        raise {1: PermissionError, 2: ProcessLookupError}.get(pid, OSError)()
+
+    monkeypatch.setattr(harness.os, "kill", kill)
+    assert harness.pid_alive(1) is True
+    assert harness.pid_alive(2) is False
+    assert harness.pid_alive(2**40) is False
+
+
+def test_lock_with_out_of_range_pid_is_unreadable(tmp_path):
+    lock = tmp_path / "session.lock"
+    lock.write_text(json.dumps({"pid": 2**40, "acquired_at": "x"}), "utf-8")
+    assert harness.read_lock(lock) is None
+
+
+def test_unlock_refuses_live_process_and_removes_nothing(root, stop_ckpt):
+    open_s(root, stop_ckpt)
+    write_lock(root / "s1", os.getpid())
+    before = harness.read_journal(root / "s1")
+    with pytest.raises(HarnessError, match=rf"{os.getpid()} est vivant"):
+        harness.unlock_session("s1", root)
+    assert (root / "s1" / "session.lock").exists()
+    assert harness.read_journal(root / "s1") == before
+
+
+def test_unlock_without_lock_is_a_clear_noop(root, stop_ckpt, capsys):
+    open_s(root, stop_ckpt)
+    assert harness.unlock_session("s1", root) is None
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    harness.add_parser(parser.add_subparsers(dest="command"))
+    args = parser.parse_args(["session-unlock", "--session", "s1", "--sessions-root", str(root)])
+    assert harness.run(args) == 0
+    assert "aucun verrou à retirer" in capsys.readouterr().out
+
+
+def test_unlock_cli_removes_dead_lock(root, stop_ckpt, capsys):
+    import argparse
+
+    open_s(root, stop_ckpt)
+    pid = dead_pid()
+    write_lock(root / "s1", pid)
+    parser = argparse.ArgumentParser()
+    harness.add_parser(parser.add_subparsers(dest="command"))
+    args = parser.parse_args(["session-unlock", "--session", "s1", "--sessions-root", str(root)])
+    assert harness.run(args) == 0
+    assert f"PID {pid} mort" in capsys.readouterr().out
+    write_lock(root / "s1", os.getpid())
+    assert harness.run(args) == 2
 
 
 @pytest.mark.parametrize("sid", ["", "..", "../x", "a/b", "a\\b", ".cache"])
