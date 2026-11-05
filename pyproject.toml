@@ -1,7 +1,7 @@
 [project]
 name = "slm-weight-editing"
 # Pas encore de release : première version (v0.1.0) quand la chaîne édition -> GGUF -> banc tourne.
-version = "0.0.0"
+version = "0.1.0"
 description = "Édition directe des poids de petits modèles de langage par un LLM (Claude Opus dans Claude Code), sans entraînement, mesurée par slm-quality-bench"
 readme = "README.md"
 authors = [{ name = "Anaël Yahi" }]
