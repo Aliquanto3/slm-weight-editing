@@ -32,6 +32,12 @@ from slm_weight_editing.harness import HarnessError  # noqa: E402
 WORDS = ["<eos>", "<unk>", "<pad>", "combien", "font", "deux", "et", "trois", "?", "x"]
 
 
+def run_batch(*args, **kwargs):
+    """Lot en mode raisonnement `off` sauf précision (le mode est obligatoire)."""
+    kwargs.setdefault("thinking", "off")
+    return harness.run_batch(*args, **kwargs)
+
+
 def build_checkpoint(path: Path, eos_id: int) -> Path:
     vocab = {w: i for i, w in enumerate(WORDS)}
     tok = Tokenizer(models.WordLevel(vocab, unk_token="<unk>"))
@@ -148,7 +154,7 @@ def test_budget_cannot_change_after_open(root, stop_ckpt, train_file):
     raw["budget"] = 50
     (d / "state.json").write_text(json.dumps(raw), "utf-8")
     with pytest.raises(HarnessError, match="différent de celui de l'ouverture"):
-        harness.run_batch("s1", "gsm8k", "train", train_file, sessions_root=root)
+        run_batch("s1", "gsm8k", "train", train_file, sessions_root=root)
     raw["budget"] = 12
     (d / "state.json").write_text(json.dumps(raw), "utf-8")
     with pytest.raises(HarnessError, match="10, 25 ou 50"):
@@ -200,14 +206,12 @@ def test_batches_decrement_and_refuse_beyond_budget(root, stop_ckpt, train_file)
     open_s(root, stop_ckpt, 10)
     d = root / "s1"
     for n in range(1, 11):
-        entry = harness.run_batch(
-            "s1", "gsm8k", "train", train_file, start=0, count=1, sessions_root=root
-        )
+        entry = run_batch("s1", "gsm8k", "train", train_file, start=0, count=1, sessions_root=root)
         assert (entry["batch"], entry["remaining"]) == (n, 10 - n)
         assert harness.read_state(d).used == n
     journal_before = (d / "journal.jsonl").read_bytes()
     with pytest.raises(HarnessError, match="budget épuisé : 10/10"):
-        harness.run_batch("s1", "gsm8k", "train", train_file, sessions_root=root)
+        run_batch("s1", "gsm8k", "train", train_file, sessions_root=root)
     assert (d / "journal.jsonl").read_bytes() == journal_before
     assert harness.read_state(d).used == 10
     assert not (d / "session.lock").exists()
@@ -260,7 +264,8 @@ def test_cli_session_flow_and_exit_codes(root, stop_ckpt, train_file, capsys):
         )
         == 2
     )
-    batch = ["run-batch", "--session", "c1", "--dataset", "gsm8k", "--data", str(train_file)]
+    batch = ["run-batch", "--session", "c1", "--dataset", "gsm8k", "--thinking", "off"]
+    batch += ["--data", str(train_file)]
     assert main([*batch, "--split", "train", "--count", "2", *common]) == 0
     assert main([*batch, "--split", "test", *common]) == 2
     assert main(["session-status", "--session", "c1", *common]) == 0
@@ -277,6 +282,11 @@ def test_frozen_session_refuses_batches(root, stop_ckpt, train_file):
     raw["frozen"] = True
     (d / "state.json").write_text(json.dumps(raw), "utf-8")
     with pytest.raises(HarnessError, match="gelée"):
+        run_batch("s1", "gsm8k", "train", train_file, sessions_root=root)
+    assert len(harness.read_journal(d)) == 1
+    assert harness.read_state(d).used == 0
+    # Sans mode, le refus du mode passe avant celui du gel : rien journalisé, rien compté.
+    with pytest.raises(HarnessError, match="aucun mode raisonnement"):
         harness.run_batch("s1", "gsm8k", "train", train_file, sessions_root=root)
     assert len(harness.read_journal(d)) == 1
     assert harness.read_state(d).used == 0
@@ -299,9 +309,9 @@ def test_batch_over_512_problems_refused(root, stop_ckpt, tmp_path):
         "".join(json.dumps({"problem": "x", "split": "train"}) + "\n" for _ in range(513)), "utf-8"
     )
     with pytest.raises(HarnessError, match="lot de 513 problèmes refusé : 512 au plus"):
-        harness.run_batch("s1", "math", "train", big, sessions_root=root)
+        run_batch("s1", "math", "train", big, sessions_root=root)
     with pytest.raises(HarnessError, match="lot de 513"):
-        harness.run_batch("s1", "math", "train", big, count=600, sessions_root=root)
+        run_batch("s1", "math", "train", big, count=600, sessions_root=root)
     assert harness.load_problems(big, 0, 512)[-1]["index"] == 511
     assert len(harness.load_problems(big, 1)) == 512
     assert harness.read_state(root / "s1").used == 0
@@ -320,7 +330,7 @@ def test_batch_over_512_problems_refused(root, stop_ckpt, tmp_path):
 def test_refuses_dataset_and_split(root, stop_ckpt, train_file, dataset, split, message):
     open_s(root, stop_ckpt)
     with pytest.raises(HarnessError, match=message):
-        harness.run_batch("s1", dataset, split, train_file, sessions_root=root)
+        run_batch("s1", dataset, split, train_file, sessions_root=root)
 
 
 def test_refuses_heldout_paths_before_reading(tmp_path, monkeypatch):
@@ -371,7 +381,7 @@ def test_refuses_non_train_file_name_and_record(tmp_path):
 
 def test_journal_line_content(root, stop_ckpt, train_file):
     open_s(root, stop_ckpt, 25)
-    entry = harness.run_batch("s1", "gsm8k", "train", train_file, start=1, sessions_root=root)
+    entry = run_batch("s1", "gsm8k", "train", train_file, start=1, sessions_root=root)
     journal = harness.read_journal(root / "s1")
     assert journal[-1] == entry
     assert (entry["event"], entry["batch"], entry["budget"], entry["remaining"]) == (
@@ -407,11 +417,11 @@ def test_weights_reloaded_from_work_each_batch(root, stop_ckpt, train_file):
 
     open_s(root, stop_ckpt)
     work_file = root / "s1" / "work" / "model.safetensors"
-    first = harness.run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
+    first = run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
     tensors = load_file(work_file)
     tensors["model.norm.weight"] = torch.ones_like(tensors["model.norm.weight"])
     save_file(tensors, work_file, metadata={"format": "pt"})
-    second = harness.run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
+    second = run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
     a, b = first["tensors_sha256"], second["tensors_sha256"]
     assert a["model.norm.weight"] != b["model.norm.weight"]
     expected = hashlib.sha256(tensors["model.norm.weight"].numpy().tobytes()).hexdigest()
@@ -440,7 +450,7 @@ def test_no_gradient_no_backward_no_optimizer(root, stop_ckpt, train_file, monke
     handle = torch.nn.modules.module.register_module_forward_hook(check)
     try:
         open_s(root, stop_ckpt)
-        harness.run_batch("s1", "gsm8k", "train", train_file, sessions_root=root)
+        run_batch("s1", "gsm8k", "train", train_file, sessions_root=root)
     finally:
         handle.remove()
     assert seen and set(seen) == {(True, False, False)}
@@ -454,7 +464,7 @@ def test_length_done_reason_at_fixed_cap(tmp_path, train_file):
     ckpt = build_checkpoint(tmp_path / "length", eos_id=1)
     root = tmp_path / "sessions"
     harness.open_session("L", 10, ckpt, sessions_root=root)
-    entry = harness.run_batch("L", "gsm8k", "train", train_file, count=1, sessions_root=root)
+    entry = run_batch("L", "gsm8k", "train", train_file, count=1, sessions_root=root)
     out = entry["outputs"][0]
     assert (out["new_tokens"], out["done_reason"]) == (4096, "length")
     assert out["text"].split() == ["<eos>"] * 4096
@@ -464,7 +474,7 @@ def test_lock_refuses_concurrent_batch(root, stop_ckpt, train_file):
     open_s(root, stop_ckpt)
     write_lock(root / "s1", os.getpid())
     with pytest.raises(HarnessError, match=rf"un lot tourne déjà.*{os.getpid()} est vivant"):
-        harness.run_batch("s1", "gsm8k", "train", train_file, sessions_root=root)
+        run_batch("s1", "gsm8k", "train", train_file, sessions_root=root)
     assert harness.read_state(root / "s1").used == 0
 
 
@@ -662,7 +672,7 @@ def test_deleted_session_id_cannot_be_reopened(root, stop_ckpt, train_file):
     import shutil
 
     open_s(root, stop_ckpt, 10)
-    harness.run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
+    run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
     shutil.rmtree(root / "s1")
     with pytest.raises(HarnessError, match="déjà ouverte"):
         open_s(root, stop_ckpt, 50)
@@ -674,12 +684,12 @@ def test_used_reset_by_hand_refused(root, stop_ckpt, train_file, capsys):
     open_s(root, stop_ckpt, 10)
     d = root / "s1"
     for _ in range(2):
-        harness.run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
+        run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
     raw = json.loads((d / "state.json").read_text("utf-8"))
     raw["used"] = 0
     (d / "state.json").write_text(json.dumps(raw), "utf-8")
     with pytest.raises(HarnessError, match="compteur incohérent : state.json compte 0 lots"):
-        harness.run_batch("s1", "gsm8k", "train", train_file, sessions_root=root)
+        run_batch("s1", "gsm8k", "train", train_file, sessions_root=root)
     assert main(["session-status", "--session", "s1", "--sessions-root", str(root)]) == 2
     assert "compteur incohérent" in capsys.readouterr().err
 
@@ -689,17 +699,17 @@ def test_crash_during_generation_consumes_batch(root, stop_ckpt, train_file, mon
     d = root / "s1"
     real = harness._generate
 
-    def crash(work, problems, device):
+    def crash(work, problems, device, thinking):
         raise RuntimeError("plantage simulé")
 
     monkeypatch.setattr(harness, "_generate", crash)
     with pytest.raises(RuntimeError, match="plantage simulé"):
-        harness.run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
+        run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
     assert harness.read_state(d).used == 1
     assert [e["event"] for e in harness.read_journal(d)] == ["open", "reserve"]
     assert not (d / "session.lock").exists()
     monkeypatch.setattr(harness, "_generate", real)
-    entry = harness.run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
+    entry = run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
     assert (entry["batch"], entry["remaining"]) == (2, 8)
     events = [(e["event"], e.get("batch")) for e in harness.read_journal(d)]
     assert events == [("open", None), ("reserve", 1), ("reserve", 2), ("batch", 2)]
@@ -718,7 +728,7 @@ def test_state_write_refused_generates_nothing(root, stop_ckpt, train_file, monk
     monkeypatch.setattr(harness.os, "replace", locked)
     monkeypatch.setattr(harness, "_generate", lambda *a: pytest.fail("généré sans décompte"))
     with pytest.raises(HarnessError, match="écriture de .*state.json impossible"):
-        harness.run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
+        run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
     assert len(calls) == harness._REPLACE_RETRIES
     assert [e["event"] for e in harness.read_journal(d)] == ["open"]
     assert harness.read_state(d).used == 0
@@ -737,7 +747,7 @@ def test_state_write_retried_while_file_held(root, stop_ckpt, train_file, monkey
         return real_replace(src, dst)
 
     monkeypatch.setattr(harness.os, "replace", flaky)
-    entry = harness.run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
+    entry = run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
     assert entry["batch"] == 1 and harness.read_state(root / "s1").used == 1
 
 
@@ -747,20 +757,20 @@ def test_freeze_during_batch_refused_never_undone(root, stop_ckpt, train_file, m
     real = harness._generate
     seen = []
 
-    def freeze_then_generate(work, problems, device):
+    def freeze_then_generate(work, problems, device, thinking):
         with pytest.raises(HarnessError, match="un lot tourne déjà") as exc:
             harness.update_state(d, frozen=True)
         seen.append(exc.value)
-        return real(work, problems, device)
+        return real(work, problems, device, thinking)
 
     monkeypatch.setattr(harness, "_generate", freeze_then_generate)
-    harness.run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
+    run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
     assert seen and harness.read_state(d).frozen is False
     monkeypatch.setattr(harness, "_generate", real)
     assert harness.update_state(d, frozen=True).frozen is True
     assert not (d / "session.lock").exists()
     with pytest.raises(HarnessError, match="gelée"):
-        harness.run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
+        run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
     assert [e["event"] for e in harness.read_journal(d)] == ["open", "reserve", "batch"]
 
 
@@ -775,7 +785,7 @@ def test_checkpoint_generation_config_cannot_change_decoding(tmp_path, train_fil
         json.dumps({"do_sample": True, "temperature": 5.0, "top_k": 0, "max_new_tokens": 5}),
         "utf-8",
     )
-    entry = harness.run_batch("G", "gsm8k", "train", train_file, count=1, sessions_root=root)
+    entry = run_batch("G", "gsm8k", "train", train_file, count=1, sessions_root=root)
     out = entry["outputs"][0]
     assert (out["new_tokens"], out["done_reason"]) == (4096, "length")
     assert set(out["text"].split()) == {"<eos>"}
@@ -793,10 +803,10 @@ def fake_cuda(monkeypatch, seen=None, free=8 << 30):
     monkeypatch.setattr(torch.version, "cuda", "13.2")
     monkeypatch.setattr(harness, "_cuda_free_bytes", lambda: free)
 
-    def fake_generate(work, problems, device):
+    def fake_generate(work, problems, device, thinking):
         if seen is not None:
             seen.append(device)
-        settings = harness._generation_settings("raw", "torch.bfloat16")
+        settings = harness._generation_settings("raw", "torch.bfloat16", thinking)
         outputs = [
             {"id": p["id"], "text": "", "new_tokens": 0, "done_reason": "stop"} for p in problems
         ]
@@ -809,7 +819,7 @@ def test_cuda_batch_journals_device_gpu_and_versions(root, stop_ckpt, train_file
     seen = []
     fake_cuda(monkeypatch, seen)
     open_s(root, stop_ckpt, 10)
-    entry = harness.run_batch(
+    entry = run_batch(
         "s1", "gsm8k", "train", train_file, count=1, sessions_root=root, device="auto"
     )
     assert seen == ["cuda"]
@@ -829,7 +839,7 @@ def test_cuda_batch_journals_device_gpu_and_versions(root, stop_ckpt, train_file
 
 def test_cpu_batch_journals_no_gpu(root, stop_ckpt, train_file):
     open_s(root, stop_ckpt, 10)
-    entry = harness.run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
+    entry = run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
     assert entry["device"]["device"] == "cpu"
     assert entry["device"]["gpu_name"] is None
     assert entry["device"]["torch_version"] == torch.__version__
@@ -843,9 +853,7 @@ def test_auto_falls_back_to_cpu_without_cuda():
 def test_cuda_requested_without_gpu_refused_without_consuming_batch(root, stop_ckpt, train_file):
     open_s(root, stop_ckpt, 10)
     with pytest.raises(HarnessError, match="--device cuda refusé : aucun GPU CUDA disponible"):
-        harness.run_batch(
-            "s1", "gsm8k", "train", train_file, count=1, sessions_root=root, device="cuda"
-        )
+        run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root, device="cuda")
     assert harness.read_state(root / "s1").used == 0
     assert [e["event"] for e in harness.read_journal(root / "s1")] == ["open"]
 
@@ -859,16 +867,14 @@ def test_device_change_mid_session_refused_before_reservation(
     root, stop_ckpt, train_file, monkeypatch
 ):
     open_s(root, stop_ckpt, 10)
-    harness.run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
+    run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
     fake_cuda(monkeypatch)
     with pytest.raises(
         HarnessError, match="changement d'appareil refusé : la séance tourne sur cpu, pas sur cuda"
     ):
-        harness.run_batch(
-            "s1", "gsm8k", "train", train_file, count=1, sessions_root=root, device="auto"
-        )
+        run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root, device="auto")
     assert harness.read_state(root / "s1").used == 1
-    harness.run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root, device="cpu")
+    run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root, device="cpu")
     assert harness.read_state(root / "s1").used == 2
 
 
@@ -877,18 +883,15 @@ def test_crashed_first_batch_still_fixes_device(root, stop_ckpt, train_file, mon
     monkeypatch.setattr(harness, "_generate", lambda *a: (_ for _ in ()).throw(RuntimeError("x")))
     open_s(root, stop_ckpt, 10)
     with pytest.raises(RuntimeError):
-        harness.run_batch(
-            "s1", "gsm8k", "train", train_file, count=1, sessions_root=root, device="auto"
-        )
+        run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root, device="auto")
     with pytest.raises(HarnessError, match="changement d'appareil refusé"):
-        harness.run_batch(
-            "s1", "gsm8k", "train", train_file, count=1, sessions_root=root, device="cpu"
-        )
+        run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root, device="cpu")
 
 
 def test_cli_device_option_default_auto_and_choices(root, stop_ckpt, train_file, capsys):
     open_s(root, stop_ckpt, 10)
     args = ["run-batch", "--session", "s1", "--sessions-root", str(root), "--dataset", "gsm8k"]
+    args += ["--thinking", "off"]
     args += ["--split", "train", "--data", str(train_file), "--count", "1"]
     assert main(args) == 0
     assert "(appareil cpu)" in capsys.readouterr().out
@@ -900,10 +903,10 @@ def test_cli_device_option_default_auto_and_choices(root, stop_ckpt, train_file,
 
 def test_generate_releases_gpu_memory(monkeypatch, tmp_path):
     calls = []
-    monkeypatch.setattr(harness, "_generate_on", lambda w, p, d: ({}, []))
+    monkeypatch.setattr(harness, "_generate_on", lambda w, p, d, t: ({}, []))
     monkeypatch.setattr(torch.cuda, "empty_cache", lambda: calls.append("empty"))
-    harness._generate(tmp_path, [], "cuda")
-    harness._generate(tmp_path, [], "cpu")
+    harness._generate(tmp_path, [], "cuda", "off")
+    harness._generate(tmp_path, [], "cpu", "off")
     assert calls == ["empty"]
 
 
@@ -919,9 +922,7 @@ def test_reserve_without_device_counts_as_cpu(root, stop_ckpt, train_file, monke
     harness._append_journal(root / "s1", {"event": "reserve", "batch": 1, "budget": 10})
     fake_cuda(monkeypatch)
     with pytest.raises(HarnessError, match="la séance tourne sur cpu, pas sur cuda"):
-        harness.run_batch(
-            "s1", "gsm8k", "train", train_file, count=1, sessions_root=root, device="auto"
-        )
+        run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root, device="auto")
 
 
 def write_fake_weights(work: Path, dtype: str, numel: int) -> None:
@@ -961,9 +962,7 @@ def test_fp32_checkpoint_too_big_for_gpu_refused_without_consuming_batch(
         f.unlink()
     write_fake_weights(work, "F32", 2_000_000_000)  # 2 Md de paramètres fp32 : 8 Go
     with pytest.raises(HarnessError, match="mémoire GPU insuffisante") as exc:
-        harness.run_batch(
-            "s1", "gsm8k", "train", train_file, count=1, sessions_root=root, device="auto"
-        )
+        run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root, device="auto")
     assert "pas de conversion en bf16" in str(exc.value)
     assert seen == []
     assert harness.read_state(root / "s1").used == 0
@@ -985,4 +984,110 @@ def test_bf16_checkpoint_fits_gpu(tmp_path, monkeypatch):
 
 def test_cpu_batch_never_queries_gpu_memory(root, stop_ckpt, train_file):
     open_s(root, stop_ckpt, 10)
-    harness.run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
+    run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
+
+
+THINKING_TEMPLATE = (
+    "{{ messages[0]['content'] }}"
+    "{% if enable_thinking is not defined %} x"
+    "{% elif enable_thinking %} deux"
+    "{% else %} trois{% endif %}"
+)
+
+
+@pytest.fixture(scope="module")
+def chat_ckpt(tmp_path_factory) -> Path:
+    """Checkpoint dont le gabarit de chat lit `enable_thinking` (omis, True ou False distincts)."""
+    path = build_checkpoint(tmp_path_factory.mktemp("ckpt") / "chat", eos_id=0)
+    tok = PreTrainedTokenizerFast.from_pretrained(path)
+    tok.chat_template = THINKING_TEMPLATE
+    tok.save_pretrained(path)
+    return path
+
+
+def _rendered_prompts(monkeypatch):
+    """Enregistre les arguments et le texte rendus par le gabarit réel (appel transmis)."""
+    seen = []
+    real = PreTrainedTokenizerFast.apply_chat_template
+
+    def spy(self, *args, **kwargs):
+        text = real(self, *args, **kwargs)
+        seen.append((kwargs.get("enable_thinking", "omis"), text))
+        return text
+
+    monkeypatch.setattr(PreTrainedTokenizerFast, "apply_chat_template", spy)
+    return seen
+
+
+@pytest.mark.parametrize(
+    ("mode", "flag", "suffix"), [("on", True, " deux"), ("off", False, " trois")]
+)
+def test_run_batch_thinking_is_passed_to_the_chat_template(
+    root, chat_ckpt, train_file, monkeypatch, mode, flag, suffix
+):
+    seen = _rendered_prompts(monkeypatch)
+    open_s(root, chat_ckpt, 10)
+    entry = run_batch(
+        "s1", "gsm8k", "train", train_file, count=1, thinking=mode, sessions_root=root
+    )
+    prompt = entry["problems"][0]["prompt"]
+    assert seen == [(flag, prompt + suffix)]
+    assert entry["thinking"] == mode
+    assert entry["settings"]["thinking"] == mode
+    assert entry["settings"]["prompt_format"] == "chat_template"
+    journal = harness.read_journal(root / "s1")
+    assert journal[-1]["thinking"] == mode
+
+
+def test_thinking_modes_render_different_texts(root, chat_ckpt, train_file, monkeypatch):
+    seen = _rendered_prompts(monkeypatch)
+    open_s(root, chat_ckpt, 10)
+    for mode in ("on", "off"):
+        run_batch("s1", "gsm8k", "train", train_file, count=1, thinking=mode, sessions_root=root)
+    assert [flag for flag, _ in seen] == [True, False]
+    assert seen[0][1] != seen[1][1]
+    assert harness.batches_by_thinking(root / "s1") == {"on": 1, "off": 1}
+
+
+@pytest.mark.parametrize("bad", [None, "maybe", "ON", ""])
+def test_run_batch_refuses_missing_or_invalid_thinking(
+    root, stop_ckpt, train_file, monkeypatch, bad
+):
+    monkeypatch.setattr(harness, "_generate", lambda *a: pytest.fail("généré sans mode"))
+    open_s(root, stop_ckpt, 10)
+    with pytest.raises(HarnessError, match=r"--thinking on\|off obligatoire") as exc:
+        harness.run_batch("s1", "gsm8k", "train", train_file, thinking=bad, sessions_root=root)
+    assert "forme permise : run-batch ... --thinking on" in str(exc.value)
+    assert harness.read_state(root / "s1").used == 0
+    assert [e["event"] for e in harness.read_journal(root / "s1")] == ["open"]
+
+
+def test_cli_run_batch_requires_thinking(root, chat_ckpt, train_file, capsys):
+    open_s(root, chat_ckpt, 10)
+    args = ["run-batch", "--session", "s1", "--sessions-root", str(root), "--dataset", "gsm8k"]
+    args += ["--split", "train", "--data", str(train_file), "--count", "1"]
+    assert main(args) == 2
+    assert "--thinking on|off obligatoire" in capsys.readouterr().err
+    assert main([*args, "--thinking", "maybe"]) == 2
+    assert "'maybe' invalide" in capsys.readouterr().err
+    assert harness.read_state(root / "s1").used == 0
+    assert main([*args, "--thinking", "on"]) == 0
+    capsys.readouterr()
+    assert main(["session-status", "--session", "s1", "--sessions-root", str(root)]) == 0
+    assert "Lots par mode raisonnement : on 1, off 0" in capsys.readouterr().out
+
+
+def test_thinking_without_chat_template_is_recorded_without_effect(
+    root, stop_ckpt, train_file, monkeypatch
+):
+    seen = _rendered_prompts(monkeypatch)
+    open_s(root, stop_ckpt, 10)
+    entry = run_batch(
+        "s1", "gsm8k", "train", train_file, count=1, thinking="on", sessions_root=root
+    )
+    assert seen == []
+    assert entry["settings"]["prompt_format"] == "raw"
+    assert entry["thinking"] == "on"
+    # Mode demandé gardé, mais pas appliqué : ni dans settings, ni dans le décompte par mode.
+    assert entry["settings"]["thinking"] is None
+    assert harness.batches_by_thinking(root / "s1") == {"on": 0, "off": 0}

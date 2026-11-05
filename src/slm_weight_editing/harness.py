@@ -522,7 +522,38 @@ def work_file_hashes(work: Path) -> dict[str, str]:
     }
 
 
-def _generation_settings(prompt_format: str, dtype: str) -> dict:
+THINKING_MODES = ("on", "off")
+THINKING_RULE = (
+    "--thinking on|off obligatoire : le mode raisonnement est explicite à chaque lot "
+    "(forme permise : run-batch ... --thinking on, ou --thinking off)"
+)
+
+
+def check_thinking(thinking: str | None) -> str:
+    """Refuse un mode absent ou hors on/off ; message = règle + forme permise."""
+    if thinking is None:
+        raise HarnessError(f"lot refusé, aucun mode raisonnement : {THINKING_RULE}")
+    if thinking not in THINKING_MODES:
+        raise HarnessError(f"lot refusé, --thinking {thinking!r} invalide : {THINKING_RULE}")
+    return thinking
+
+
+def batches_by_thinking(directory: str | Path) -> dict[str, int]:
+    """Lots journalisés par mode raisonnement appliqué.
+
+    Ignorées : lignes batch sans mode, et lots en prompt brut (`raw`), où le mode est sans effet.
+    """
+    counts = dict.fromkeys(THINKING_MODES, 0)
+    for entry in read_journal(directory):
+        if entry.get("event") != "batch" or entry.get("thinking") not in counts:
+            continue
+        if (entry.get("settings") or {}).get("prompt_format") == "raw":
+            continue
+        counts[entry["thinking"]] += 1
+    return counts
+
+
+def _generation_settings(prompt_format: str, dtype: str, thinking: str) -> dict:
     return {
         "do_sample": False,
         "num_beams": 1,
@@ -531,6 +562,8 @@ def _generation_settings(prompt_format: str, dtype: str) -> dict:
         "top_k": None,
         "max_new_tokens": MAX_NEW_TOKENS,
         "prompt_format": prompt_format,
+        # Mode appliqué : None sans gabarit de chat (prompt_format "raw"), où il est sans effet.
+        "thinking": thinking if prompt_format == "chat_template" else None,
         "dtype": dtype,
         "inference_mode": True,
         "requires_grad": False,
@@ -644,13 +677,15 @@ def check_cuda_memory(work: Path) -> None:
     raise HarnessError(f"--device cuda refusé : mémoire GPU insuffisante ({detail}){hint}")
 
 
-def _generate(work: Path, problems: list[dict], device: str = "cpu") -> tuple[dict, list[dict]]:
+def _generate(
+    work: Path, problems: list[dict], device: str, thinking: str
+) -> tuple[dict, list[dict]]:
     import gc
 
     import torch
 
     try:
-        return _generate_on(work, problems, device)
+        return _generate_on(work, problems, device, thinking)
     finally:
         # Les poids sont rechargés à chaque lot : rien ne doit rester sur le GPU entre deux lots.
         gc.collect()
@@ -658,7 +693,9 @@ def _generate(work: Path, problems: list[dict], device: str = "cpu") -> tuple[di
             torch.cuda.empty_cache()
 
 
-def _generate_on(work: Path, problems: list[dict], device: str) -> tuple[dict, list[dict]]:
+def _generate_on(
+    work: Path, problems: list[dict], device: str, thinking: str
+) -> tuple[dict, list[dict]]:
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 
@@ -692,6 +729,7 @@ def _generate_on(work: Path, problems: list[dict], device: str) -> tuple[dict, l
                     [{"role": "user", "content": problem["prompt"]}],
                     tokenize=False,
                     add_generation_prompt=True,
+                    enable_thinking=thinking == "on",
                 )
             else:
                 text = problem["prompt"]
@@ -707,7 +745,9 @@ def _generate_on(work: Path, problems: list[dict], device: str) -> tuple[dict, l
                     "done_reason": reason,
                 }
             )
-    settings = _generation_settings("chat_template" if use_chat else "raw", str(model.dtype))
+    settings = _generation_settings(
+        "chat_template" if use_chat else "raw", str(model.dtype), thinking
+    )
     return settings, outputs
 
 
@@ -717,6 +757,7 @@ def run_batch(
     split: str,
     data_path: str | Path,
     *,
+    thinking: str | None = None,
     start: int = 0,
     count: int | None = None,
     sessions_root: str | Path = DEFAULT_SESSIONS_ROOT,
@@ -726,7 +767,12 @@ def run_batch(
 
     `device` : cpu (défaut de l'API), cuda ou auto ; la CLI passe auto par défaut. L'appareil
     est fixé par le premier lot de la séance (un autre est refusé avant toute réservation).
+    `thinking` ("on" ou "off") est obligatoire : refus avant tout calcul et tout décompte.
+    Il devient `enable_thinking` du gabarit de chat ; sans gabarit (prompt brut), sans effet :
+    la ligne `batch` garde le mode demandé, `settings.thinking` vaut None et le lot n'est pas
+    compté par `batches_by_thinking`.
     """
+    thinking = check_thinking(thinking)
     resolved = check_data_request(dataset, split, data_path)
     directory = session_dir(session_id, sessions_root)
     read_state(directory)
@@ -761,12 +807,13 @@ def run_batch(
                 "at": started,
             },
         )
-        settings, outputs = _generate(work, problems, actual_device)
+        settings, outputs = _generate(work, problems, actual_device, thinking)
         entry = {
             "event": "batch",
             "batch": number,
             "budget": state.budget,
             "remaining": state.budget - number,
+            "thinking": thinking,
             "settings": settings,
             "device": device_info(actual_device),
             "dataset": dataset,
@@ -814,6 +861,10 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
         default="auto",
         help="auto (défaut : cuda si disponible, sinon cpu), cpu ou cuda ; fixé par le premier lot",
     )
+    rb.add_argument(
+        "--thinking",
+        help="on ou off, obligatoire : active ou non le raisonnement du gabarit de chat",
+    )
     rb.add_argument("--start", type=int, default=0, help="premier problème (défaut 0)")
     rb.add_argument("--count", type=int, help="nombre de problèmes (défaut : jusqu'à la fin)")
     root_help += " ; depuis un espace de séance, celui de workspace.json seulement"
@@ -845,6 +896,7 @@ def run(args: argparse.Namespace) -> int:
             print(f"Séance {state.session_id} ouverte : budget {state.budget} lots")
             print(CEILING_NOTE)
         elif args.command == "run-batch":
+            check_thinking(args.thinking)
             root = bind_workspace(args.session, args.sessions_root, args.data)
             entry = run_batch(
                 args.session,
@@ -853,6 +905,7 @@ def run(args: argparse.Namespace) -> int:
                 args.data,
                 start=args.start,
                 count=args.count,
+                thinking=args.thinking,
                 sessions_root=root,
                 device=args.device,
             )
@@ -876,6 +929,8 @@ def run(args: argparse.Namespace) -> int:
                 f"Séance {state.session_id} : {used}/{state.budget} lots, "
                 f"reste {state.budget - used}, gelée : {'oui' if state.frozen else 'non'}"
             )
+            modes = batches_by_thinking(directory)
+            print("Lots par mode raisonnement : " + ", ".join(f"{m} {modes[m]}" for m in modes))
             print(CEILING_NOTE)
     except HarnessError as exc:
         print(f"Erreur : {exc}", file=sys.stderr)

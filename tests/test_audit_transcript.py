@@ -34,7 +34,7 @@ with open(WORK, "r+b") as f:
 """
 RUN_BATCH = (
     f"{UV} run-batch --session s1 --sessions-root sessions "
-    "--dataset gsm8k --split train --data data/gsm8k-train.jsonl --count 64"
+    "--dataset gsm8k --split train --data data/gsm8k-train.jsonl --thinking off --count 64"
 )
 CLEAN_CALLS = [
     ("Bash", {"command": RUN_BATCH, "description": "Lot 1"}),
@@ -160,6 +160,14 @@ def test_clean_transcript_passes(tmp_path, capsys):
     s = make_session(tmp_path, dict(REF))
     assert cli(t, s, write_reference(tmp_path)) == 0
     assert "Audit réussi" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("mode", ["--thinking on", "--thinking off", ""])
+def test_run_batch_thinking_option_is_not_a_violation(tmp_path, mode):
+    # Un lot sans --thinking est refusé par le harnais (sans décompte) : pas une violation.
+    command = RUN_BATCH.replace("--thinking off", mode).replace("  ", " ")
+    t = write_transcript(tmp_path / "t.jsonl", [("Bash", {"command": command})])
+    assert audit_t(t) == []
 
 
 VIOLATIONS = [
@@ -936,3 +944,33 @@ def test_other_uv_variable_in_settings_is_refused(tmp_path, local):
     assert [(v.rule, v.detail) for v in found] == [
         ("environnement", "réglages : env.UV_WORKING_DIR défini")
     ]
+
+
+def test_consigne_commands_pass_the_audit_once_placeholders_are_filled():
+    # Les commandes du bloc de la consigne rendue, gabarits remplis, passent la liste blanche :
+    # une ligne run-batch complète par mode, aucune forme `on|off` (barre = enchaînement refusé)
+    # ni `<MODE>` (chevron = redirection refusée), même recopiées telles quelles.
+    from slm_weight_editing.workspace import render
+
+    text = render("CONSIGNE.md", session_id="s1", budget=10, repo=REPO, data=["gsm8k-train.jsonl"])
+    block = text.split("```\n", 2)[1]
+    commands = [line for line in block.splitlines() if line.strip()]
+    assert len(commands) == 4
+    assert [c.split("--thinking ")[1].split()[0] for c in commands[:2]] == ["on", "off"]
+    for command in commands:
+        filled = (
+            command.replace("<fichier>", "gsm8k-train.jsonl")
+            .replace("<nom>", "edit")
+            .replace("[--start N] [--count N]", "--start 0 --count 8")
+        )
+        assert audit.check_shell(filled, CTX_S1) == [], filled
+
+
+@pytest.mark.parametrize("name", ["CONSIGNE.md", "CLAUDE.md"])
+def test_instructions_give_thinking_modes_without_unsafe_forms(name):
+    from slm_weight_editing.workspace import render
+
+    text = render(name, session_id="s1", budget=10, repo=REPO, data=["gsm8k-train.jsonl"])
+    assert "--thinking on" in text and "--thinking off" in text
+    assert "<MODE>" not in text
+    assert "--thinking on|off" not in text
