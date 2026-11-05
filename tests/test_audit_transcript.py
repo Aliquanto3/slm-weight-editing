@@ -706,7 +706,7 @@ def test_consigne_states_protocol():
     for needle in (
         "run-batch",
         "session-status",
-        "run-script scripts/<nom>.py",
+        "run-script scripts/NOM.py",
         "uv run<EXTRA> slm-weight-editing",
         "--sessions-root sessions",
         "<BUDGET>",
@@ -959,11 +959,31 @@ def test_consigne_commands_pass_the_audit_once_placeholders_are_filled():
     assert [c.split("--thinking ")[1].split()[0] for c in commands[:2]] == ["on", "off"]
     for command in commands:
         filled = (
-            command.replace("<fichier>", "gsm8k-train.jsonl")
-            .replace("<nom>", "edit")
+            command.replace("FICHIER.jsonl", "gsm8k-train.jsonl")
+            .replace("NOM.py", "edit.py")
             .replace("[--start N] [--count N]", "--start 0 --count 8")
         )
         assert audit.check_shell(filled, CTX_S1) == [], filled
+
+
+@pytest.mark.parametrize("name", ["CONSIGNE.md", "CLAUDE.md"])
+def test_rendered_instructions_have_no_shell_metacharacter_templates(name):
+    # Chaque commande des blocs de code rendus, recopiée littéralement, passe l'audit. Seules
+    # les options entre crochets (facultatives) sont retirées avant la vérification.
+    from slm_weight_editing.workspace import render
+
+    text = render(name, session_id="s1", budget=10, repo=REPO, data=["gsm8k-train.jsonl"])
+    blocks = text.split("```")[1::2]
+    commands = [
+        re.sub(r"\s*\[[^\]]*\]", "", line).strip()
+        for block in blocks
+        for line in block.splitlines()
+        if line.strip().startswith("uv run")
+    ]
+    assert commands or name == "CLAUDE.md"
+    for command in commands:
+        assert "<" not in command and ">" not in command, command
+        assert audit.check_shell(command, CTX_S1) == [], command
 
 
 @pytest.mark.parametrize("name", ["CONSIGNE.md", "CLAUDE.md"])

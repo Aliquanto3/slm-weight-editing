@@ -433,7 +433,7 @@ def _report(
     os.replace(partial, gguf_path)
 
     # 4. Modelfile et diff vérifiable (chemins personnels masqués : le diff se publie).
-    modelfile.write_text(modelfile_text, "utf-8")
+    modelfile.write_text(modelfile_text, "utf-8", newline="\n")
     diff = {
         "format": DIFF_FORMAT,
         "tag": tag,

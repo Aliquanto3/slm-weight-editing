@@ -148,6 +148,8 @@ def test_cli_model_writes_faithful_modelfiles(tmp_path, capsys, monkeypatch):
     test_mf = (tmp_path / "models" / "qwen3.5-0.8b-output.Modelfile").read_text("utf-8")
     control_mf = (tmp_path / "models" / "qwen3.5-0.8b-output-temoin.Modelfile").read_text("utf-8")
     assert test_mf.splitlines()[0] == f"FROM {dst.resolve().as_posix()}"
+    for name in ("qwen3.5-0.8b-output.Modelfile", "qwen3.5-0.8b-output-temoin.Modelfile"):
+        assert b"\r" not in (tmp_path / "models" / name).read_bytes()
     first = control_mf.splitlines()[0]
     assert first.startswith("FROM ") and "/blobs/sha256-" in first
     assert test_mf.splitlines()[1:] == control_mf.splitlines()[1:]

@@ -179,7 +179,7 @@ def run(args: argparse.Namespace) -> int:
         try:
             for path, text in pending:
                 modelfiles.append(path)
-                path.write_text(text, "utf-8")
+                path.write_text(text, "utf-8", newline="\n")
         except OSError:
             # Rien à moitié : une relance trouverait sinon la sortie existante.
             for path in [*modelfiles, dst]:

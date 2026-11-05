@@ -28,6 +28,9 @@ licence de l'officiel, lus dans son manifeste :
 - `models/qwen3.5-0.8b-output.Modelfile` : `FROM` le GGUF d'essai ;
 - `models/qwen3.5-0.8b-output-temoin.Modelfile` : `FROM` le blob GGUF officiel (témoin).
 
+Les Modelfiles générés sous Windows avant le correctif « LF » étaient écrits en CRLF (y compris
+dans les blocs `TEMPLATE`) : à régénérer. Les octets sont désormais écrits tels quels, en LF.
+
 Les deux modèles ne diffèrent donc que par `output.weight`. Ne pas écrire le Modelfile à la main :
 un Modelfile réduit à `FROM` perd les paramètres de l'officiel (dont `presence_penalty`, actif
 même à température 0) et l'écart de réponses ne prouverait plus rien.

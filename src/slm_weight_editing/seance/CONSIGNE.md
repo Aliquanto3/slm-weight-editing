@@ -17,10 +17,10 @@ Tu édites directement les poids d'un petit modèle de langage pour corriger un 
 Toute autre commande est refusée par les réglages de la séance, et toute la séance est auditée.
 
 ```
-uv run<EXTRA> slm-weight-editing run-batch --session <ID_SEANCE> --sessions-root sessions --dataset gsm8k --split train --data data/<fichier> --thinking on [--start N] [--count N]
-uv run<EXTRA> slm-weight-editing run-batch --session <ID_SEANCE> --sessions-root sessions --dataset gsm8k --split train --data data/<fichier> --thinking off [--start N] [--count N]
+uv run<EXTRA> slm-weight-editing run-batch --session <ID_SEANCE> --sessions-root sessions --dataset gsm8k --split train --data data/FICHIER.jsonl --thinking on [--start N] [--count N]
+uv run<EXTRA> slm-weight-editing run-batch --session <ID_SEANCE> --sessions-root sessions --dataset gsm8k --split train --data data/FICHIER.jsonl --thinking off [--start N] [--count N]
 uv run<EXTRA> slm-weight-editing session-status --session <ID_SEANCE> --sessions-root sessions
-uv run<EXTRA> slm-weight-editing run-script scripts/<nom>.py --session <ID_SEANCE> --sessions-root sessions
+uv run<EXTRA> slm-weight-editing run-script scripts/NOM.py --session <ID_SEANCE> --sessions-root sessions
 ```
 
 - `run-batch` est la seule voie d'exécution du modèle : jeux `gsm8k` ou `math`, split `train` seulement, au plus 512 problèmes par lot, génération gloutonne, 4096 jetons au plus, poids rechargés depuis `work/` à chaque lot. Données train disponibles : <DONNEES>.

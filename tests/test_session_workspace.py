@@ -174,7 +174,7 @@ def test_settings_json(ws):
 def test_instructions_are_rendered(ws):
     consigne = (ws / "CONSIGNE.md").read_text(encoding="utf-8")
     repo = REPO.resolve().as_posix()
-    assert "uv run slm-weight-editing run-script scripts/<nom>.py" in consigne
+    assert "uv run slm-weight-editing run-script scripts/NOM.py" in consigne
     assert repo not in consigne and "--project" not in consigne
     assert "--session s1 --sessions-root sessions" in consigne
     assert "`10` lots" in consigne and "`data/gsm8k-train.jsonl`" in consigne
@@ -213,7 +213,7 @@ def test_cuda_workspace_instructions_carry_extra(ws_cuda):
     repo = REPO.resolve().as_posix()
     consigne = (ws_cuda / "CONSIGNE.md").read_text(encoding="utf-8")
     base_cmd = "uv run --extra cuda slm-weight-editing"
-    for sub in ("run-batch", "session-status", "run-script scripts/<nom>.py"):
+    for sub in ("run-batch", "session-status", "run-script scripts/NOM.py"):
         assert f"{base_cmd} {sub}" in consigne
     assert "<EXTRA>" not in consigne
     claude = (ws_cuda / "CLAUDE.md").read_text(encoding="utf-8")
