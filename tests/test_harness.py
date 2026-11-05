@@ -285,6 +285,11 @@ def test_frozen_session_refuses_batches(root, stop_ckpt, train_file):
         run_batch("s1", "gsm8k", "train", train_file, sessions_root=root)
     assert len(harness.read_journal(d)) == 1
     assert harness.read_state(d).used == 0
+    # Sans mode, le refus du mode passe avant celui du gel : rien journalisé, rien compté.
+    with pytest.raises(HarnessError, match="aucun mode raisonnement"):
+        harness.run_batch("s1", "gsm8k", "train", train_file, sessions_root=root)
+    assert len(harness.read_journal(d)) == 1
+    assert harness.read_state(d).used == 0
 
 
 def test_update_state_freezes_and_never_unfreezes(root, stop_ckpt):
@@ -756,7 +761,7 @@ def test_freeze_during_batch_refused_never_undone(root, stop_ckpt, train_file, m
         with pytest.raises(HarnessError, match="un lot tourne déjà") as exc:
             harness.update_state(d, frozen=True)
         seen.append(exc.value)
-        return real(work, problems, device)
+        return real(work, problems, device, thinking)
 
     monkeypatch.setattr(harness, "_generate", freeze_then_generate)
     run_batch("s1", "gsm8k", "train", train_file, count=1, sessions_root=root)
@@ -900,8 +905,8 @@ def test_generate_releases_gpu_memory(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(harness, "_generate_on", lambda w, p, d, t: ({}, []))
     monkeypatch.setattr(torch.cuda, "empty_cache", lambda: calls.append("empty"))
-    harness._generate(tmp_path, [], "cuda")
-    harness._generate(tmp_path, [], "cpu")
+    harness._generate(tmp_path, [], "cuda", "off")
+    harness._generate(tmp_path, [], "cpu", "off")
     assert calls == ["empty"]
 
 
@@ -1057,8 +1062,8 @@ def test_run_batch_refuses_missing_or_invalid_thinking(
     assert [e["event"] for e in harness.read_journal(root / "s1")] == ["open"]
 
 
-def test_cli_run_batch_requires_thinking(root, stop_ckpt, train_file, capsys):
-    open_s(root, stop_ckpt, 10)
+def test_cli_run_batch_requires_thinking(root, chat_ckpt, train_file, capsys):
+    open_s(root, chat_ckpt, 10)
     args = ["run-batch", "--session", "s1", "--sessions-root", str(root), "--dataset", "gsm8k"]
     args += ["--split", "train", "--data", str(train_file), "--count", "1"]
     assert main(args) == 2
@@ -1083,3 +1088,6 @@ def test_thinking_without_chat_template_is_recorded_without_effect(
     assert seen == []
     assert entry["settings"]["prompt_format"] == "raw"
     assert entry["thinking"] == "on"
+    # Mode demandé gardé, mais pas appliqué : ni dans settings, ni dans le décompte par mode.
+    assert entry["settings"]["thinking"] is None
+    assert harness.batches_by_thinking(root / "s1") == {"on": 0, "off": 0}

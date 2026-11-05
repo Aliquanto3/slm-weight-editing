@@ -539,11 +539,17 @@ def check_thinking(thinking: str | None) -> str:
 
 
 def batches_by_thinking(directory: str | Path) -> dict[str, int]:
-    """Nombre de lots journalisés par mode raisonnement (lignes batch sans mode : ignorées)."""
+    """Lots journalisés par mode raisonnement appliqué.
+
+    Ignorées : lignes batch sans mode, et lots en prompt brut (`raw`), où le mode est sans effet.
+    """
     counts = dict.fromkeys(THINKING_MODES, 0)
     for entry in read_journal(directory):
-        if entry.get("event") == "batch" and entry.get("thinking") in counts:
-            counts[entry["thinking"]] += 1
+        if entry.get("event") != "batch" or entry.get("thinking") not in counts:
+            continue
+        if (entry.get("settings") or {}).get("prompt_format") == "raw":
+            continue
+        counts[entry["thinking"]] += 1
     return counts
 
 
@@ -556,8 +562,8 @@ def _generation_settings(prompt_format: str, dtype: str, thinking: str) -> dict:
         "top_k": None,
         "max_new_tokens": MAX_NEW_TOKENS,
         "prompt_format": prompt_format,
-        # Sans gabarit de chat (prompt_format "raw"), le mode est inscrit mais sans effet.
-        "thinking": thinking,
+        # Mode appliqué : None sans gabarit de chat (prompt_format "raw"), où il est sans effet.
+        "thinking": thinking if prompt_format == "chat_template" else None,
         "dtype": dtype,
         "inference_mode": True,
         "requires_grad": False,
@@ -672,7 +678,7 @@ def check_cuda_memory(work: Path) -> None:
 
 
 def _generate(
-    work: Path, problems: list[dict], device: str = "cpu", thinking: str = "off"
+    work: Path, problems: list[dict], device: str, thinking: str
 ) -> tuple[dict, list[dict]]:
     import gc
 
@@ -688,7 +694,7 @@ def _generate(
 
 
 def _generate_on(
-    work: Path, problems: list[dict], device: str, thinking: str = "off"
+    work: Path, problems: list[dict], device: str, thinking: str
 ) -> tuple[dict, list[dict]]:
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
@@ -762,7 +768,9 @@ def run_batch(
     `device` : cpu (défaut de l'API), cuda ou auto ; la CLI passe auto par défaut. L'appareil
     est fixé par le premier lot de la séance (un autre est refusé avant toute réservation).
     `thinking` ("on" ou "off") est obligatoire : refus avant tout calcul et tout décompte.
-    Il devient `enable_thinking` du gabarit de chat ; sans gabarit (prompt brut), sans effet.
+    Il devient `enable_thinking` du gabarit de chat ; sans gabarit (prompt brut), sans effet :
+    la ligne `batch` garde le mode demandé, `settings.thinking` vaut None et le lot n'est pas
+    compté par `batches_by_thinking`.
     """
     thinking = check_thinking(thinking)
     resolved = check_data_request(dataset, split, data_path)
@@ -888,6 +896,7 @@ def run(args: argparse.Namespace) -> int:
             print(f"Séance {state.session_id} ouverte : budget {state.budget} lots")
             print(CEILING_NOTE)
         elif args.command == "run-batch":
+            check_thinking(args.thinking)
             root = bind_workspace(args.session, args.sessions_root, args.data)
             entry = run_batch(
                 args.session,

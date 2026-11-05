@@ -944,3 +944,23 @@ def test_other_uv_variable_in_settings_is_refused(tmp_path, local):
     assert [(v.rule, v.detail) for v in found] == [
         ("environnement", "réglages : env.UV_WORKING_DIR défini")
     ]
+
+
+@pytest.mark.parametrize("mode", ["on", "off"])
+def test_consigne_commands_pass_the_audit_once_placeholders_are_filled(mode):
+    # Les commandes du bloc de la consigne rendue, gabarits remplis, passent la liste blanche :
+    # aucune forme `on|off` (barre verticale = enchaînement refusé) ne doit y rester.
+    from slm_weight_editing.workspace import render
+
+    text = render("CONSIGNE.md", session_id="s1", budget=10, repo=REPO, data=["gsm8k-train.jsonl"])
+    block = text.split("```\n", 2)[1]
+    commands = [line for line in block.splitlines() if line.strip()]
+    assert len(commands) == 3
+    for command in commands:
+        filled = (
+            command.replace("<fichier>", "gsm8k-train.jsonl")
+            .replace("<MODE>", mode)
+            .replace("<nom>", "edit")
+            .replace("[--start N] [--count N]", "--start 0 --count 8")
+        )
+        assert audit.check_shell(filled, CTX_S1) == [], filled
