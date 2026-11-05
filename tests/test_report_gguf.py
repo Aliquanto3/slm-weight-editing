@@ -3,7 +3,20 @@ import json
 
 import numpy as np
 import pytest
-from conftest import LICENSE, TARGET, build, hf_name, write_safetensors
+from conftest import (
+    COLS,
+    LICENSE,
+    ROWS,
+    TARGET,
+    bf16_to_f32,
+    build,
+    hf_name,
+    q8_0_reference,
+    to_bf16,
+    write_gguf,
+    write_safetensors,
+    write_store,
+)
 
 import slm_weight_editing
 from slm_weight_editing.gguf_file import read_gguf
@@ -347,3 +360,90 @@ def test_cli_reports_an_undecodable_license(tmp_path, capsys):
     )
     assert code == 1
     assert "couche license" in capsys.readouterr().err
+
+
+EMBED = "model.language_model.embed_tokens.weight"
+
+
+def build_embed(tmp_path):
+    """GGUF officiel avec token_embd.weight (sans output.weight) ; la ligne 3 est éditée."""
+    rng = np.random.default_rng(7)
+    base = to_bf16(rng.normal(0, 0.05, (ROWS, COLS)).astype(np.float32))
+    edited = base.copy()
+    row = bf16_to_f32(base[3]).copy()
+    row[40] += 0.3
+    edited[3] = to_bf16(row)
+    gguf_path = write_gguf(tmp_path / "officiel.gguf", {"token_embd.weight": q8_0_reference(base)})
+    store = write_store(tmp_path / "store", gguf_path)
+    ckpt = tmp_path / "edite"
+    ckpt.mkdir()
+    write_safetensors(ckpt / "model.safetensors", {EMBED: edited})
+    base_dir = tmp_path / "base"
+    base_dir.mkdir()
+    write_safetensors(base_dir / "model.safetensors", {EMBED: base})
+    return store, gguf_path, ckpt, base_dir, edited
+
+
+def test_embed_tokens_maps_to_token_embd():
+    assert gguf_name(EMBED) == "token_embd.weight"
+    assert gguf_name("model.embed_tokens.weight") == "token_embd.weight"
+    assert gguf_name("model.language_model.layers.3.self_attn.q_proj.weight") is None
+    assert gguf_name("lm_head.weight") is None
+
+
+def test_report_embed_row_changes_only_that_rows_blocks(tmp_path):
+    store, official_path, ckpt, base_dir, edited = build_embed(tmp_path)
+    out = tmp_path / "out"
+    sha = hashlib.sha256(edited.tobytes()).hexdigest()
+    result = report_gguf(
+        ckpt, out, store=store, base_checkpoint=base_dir, expected_sha256={EMBED: sha}
+    )
+    official = official_path.read_bytes()
+    new = result.gguf.read_bytes()
+    info = read_gguf(official_path).tensor("token_embd.weight")
+    assert info.dims == (COLS, ROWS)
+    block = 34  # Q8_0 : échelle f16 + 32 quanta
+    row_bytes = COLS // 32 * block
+    changed = [i for i in range(len(official)) if official[i] != new[i]]
+    start = info.offset + 3 * row_bytes
+    assert changed and start <= min(changed) and max(changed) < start + row_bytes
+    # Le bloc 1 de la ligne 3 (colonnes 32 à 63) porte seul la modification.
+    assert min(changed) >= start + block
+    assert len(new) == len(official)
+    diff = json.loads(result.diff.read_text("utf-8"))
+    assert [t["gguf_name"] for t in diff["tensors"]] == ["token_embd.weight"]
+    assert diff["tensors"][0]["gguf_blocks_changed"] == 1
+    fidelity = json.loads(result.fidelity.read_text("utf-8"))
+    assert fidelity["ok"] and fidelity["controls"] == 1
+    assert fidelity["tensors"][0]["gguf_name"] == "token_embd.weight"
+    assert fidelity["tensors"][0]["origin"] == "checkpoint de base, original du tenseur visé"
+
+
+def test_report_embed_fidelity_failure_on_tampered_official(tmp_path):
+    store, official_path, ckpt, base_dir, edited = build_embed(tmp_path)
+    bad = tmp_path / "bad"
+    bad.mkdir()
+    rng = np.random.default_rng(9)
+    other = to_bf16(rng.normal(0, 0.05, (ROWS, COLS)).astype(np.float32))
+    store2 = write_store(bad / "store", write_gguf(bad / "o.gguf", {"token_embd.weight": other}))
+    sha = hashlib.sha256(edited.tobytes()).hexdigest()
+    with pytest.raises(FidelityError, match="token_embd.weight"):
+        report_gguf(
+            ckpt,
+            tmp_path / "o",
+            store=store2,
+            base_checkpoint=base_dir,
+            expected_sha256={EMBED: sha},
+        )
+
+
+def test_unsupported_tensor_is_still_refused(tmp_path):
+    store, _, ckpt, base_dir, edited = build_embed(tmp_path)
+    q = "model.language_model.layers.0.self_attn.q_proj.weight"
+    write_safetensors(ckpt / "model.safetensors", {EMBED: edited, q: edited})
+    with pytest.raises(ReportError, match="pas de correspondance GGUF vérifiée"):
+        report_gguf(ckpt, tmp_path / "o", store=store, expected_sha256={q: sha256_of(edited)})
+
+
+def sha256_of(arr):
+    return hashlib.sha256(arr.tobytes()).hexdigest()

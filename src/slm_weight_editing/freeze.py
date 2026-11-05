@@ -127,12 +127,28 @@ def compute_tensor_diff(
     return out
 
 
+IGNORED_DIR = ".cache"
+
+
+def is_ignored_file(path: object) -> bool:
+    """Métadonnées de téléchargement HF (`.cache/...`) : jamais une modification de la séance."""
+    return isinstance(path, str) and path.replace("\\", "/").split("/", 1)[0] == IGNORED_DIR
+
+
+def relevant_files(files: list[dict]) -> list[dict]:
+    """Entrées `files_changed` hors `.cache/` (les seules qui comptent pour apply et report)."""
+    return [f for f in files if not is_ignored_file(f.get("path"))]
+
+
 def changed_files(base_files: dict[str, str], work_files: dict[str, str]) -> list[dict]:
-    """Fichiers non safetensors qui diffèrent de la base (modifiés, ajoutés ou supprimés)."""
+    """Fichiers non safetensors qui diffèrent de la base (modifiés, ajoutés ou supprimés).
+
+    Les chemins sous `.cache/` sont ignorés (métadonnées de téléchargement HF absentes de work/).
+    """
     return [
         {"path": p, "sha256_before": base_files.get(p), "sha256_after": work_files.get(p)}
         for p in sorted(set(base_files) | set(work_files))
-        if base_files.get(p) != work_files.get(p)
+        if base_files.get(p) != work_files.get(p) and not is_ignored_file(p)
     ]
 
 
@@ -487,12 +503,12 @@ def run(args: argparse.Namespace) -> int:
                 f"{sum(t['changed'] for t in diff['tensors'])} éléments"
             )
             print(f"Diff : {Path(where) / DIFF_FILE}")
-            for f in diff["files_changed"]:
+            for f in relevant_files(diff["files_changed"]):
                 print(f"Attention : {f['path']} diffère de la base (non rejoué par apply-diff)")
         else:
             meta = apply_diff(args.diff, args.original, args.out)
             print(f"Checkpoint rejoué : {args.out} ({len(meta['tensors'])} tenseurs vérifiés)")
-            for f in meta["files_changed"]:
+            for f in relevant_files(meta["files_changed"]):
                 print(f"Attention : {f['path']} différait de la base dans la séance (non rejoué)")
     except (HarnessError, DiffError, SafetensorsError, OSError) as exc:
         print(f"Erreur : {exc}", file=sys.stderr)

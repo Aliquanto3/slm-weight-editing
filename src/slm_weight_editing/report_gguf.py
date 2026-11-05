@@ -45,12 +45,18 @@ WSP_EDITED_SHA256 = {
 DIFF_FORMAT = "slm-weight-editing/diff-v1"
 SUPPORTED_GGML_TYPES = ("Q8_0",)
 
-# Seule correspondance vérifiée sur le GGUF officiel de qwen3.5:0.8b (blk.N.ffn_down.weight,
-# Q8_0, dims ggml (3584, 1024) pour une forme HF (1024, 3584)) ; les autres noms sont refusés.
+# Correspondances vérifiées sur le GGUF officiel de qwen3.5:0.8b ; les autres noms sont refusés.
+# blk.N.ffn_down.weight : Q8_0, dims ggml (3584, 1024) pour une forme HF (1024, 3584).
+# token_embd.weight : Q8_0, dims ggml (1024, 248320) pour HF (248320, 1024) ; embeddings liés
+# (pas de output.weight). Les blocs de 32 courent le long de la dimension contiguë (une ligne HF).
 _HF_TO_GGUF = (
     (
         re.compile(r"^model\.(?:language_model\.)?layers\.(\d+)\.mlp\.down_proj\.weight$"),
-        "ffn_down",
+        "blk.{}.ffn_down.weight",
+    ),
+    (
+        re.compile(r"^model\.(?:language_model\.)?embed_tokens\.weight$"),
+        "token_embd.weight",
     ),
 )
 
@@ -75,10 +81,10 @@ class FidelityError(ReportError):
 
 def gguf_name(hf_name: str) -> str | None:
     """Nom GGUF d'un tenseur HF, ou None s'il n'a pas de correspondance vérifiée."""
-    for pattern, suffix in _HF_TO_GGUF:
+    for pattern, template in _HF_TO_GGUF:
         m = pattern.match(hf_name)
         if m:
-            return f"blk.{m.group(1)}.{suffix}.weight"
+            return template.format(*m.groups())
     return None
 
 

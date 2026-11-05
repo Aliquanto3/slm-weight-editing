@@ -117,7 +117,7 @@ Le harnais est la seule voie d'exécution du modèle pour l'agent éditeur (prot
    uv run slm-weight-editing report-gguf --checkpoint models/rejoue/s1 --base-checkpoint models/hf/qwen3.5-base --edit-diff models/sessions/s1/freeze/diff.json --tag qwen3.5-s1:0.8b
    ```
 
-   Un diff dont `files_changed` n'est pas vide (config ou tokenizer modifiés dans `work/`) est refusé : ces fichiers ne sont rejoués ni par `apply-diff` ni par `report-gguf`. Sans `--edit-diff`, `report-gguf` garde son comportement (édition du MIT). Le `diff.json` de report décrit la séance (`edit.session_id`, sha256 du diff et du journal), jamais l'édition du MIT.
+   Tenseurs pris en charge : `down_proj` (`blk.N.ffn_down.weight`) et `embed_tokens.weight` (`token_embd.weight`, embeddings liés, pas de `output.weight`), en Q8_0 ; tout autre nom (`q_proj`…) est refusé. Les entrées `files_changed` sous `.cache/` (métadonnées de téléchargement HF) sont ignorées au gel, par `apply-diff` et par `report-gguf`. Un diff dont `files_changed` contient une autre entrée (config ou tokenizer modifiés dans `work/`) est refusé : ces fichiers ne sont rejoués ni par `apply-diff` ni par `report-gguf`. Sans `--edit-diff`, `report-gguf` garde son comportement (édition du MIT). Le `diff.json` de report décrit la séance (`edit.session_id`, sha256 du diff et du journal), jamais l'édition du MIT.
 
 4. Comparer à une autre édition sans rejouer sur disque : `compare-edits --original <base> --diff-a models/sessions/s1/freeze/diff.json --edit-b <checkpoint>` (`--diff-a` remplace `--edit-a`, `--diff-b` remplace `--edit-b`).
 
