@@ -94,7 +94,7 @@ def add_output_weight(src: str | Path, dst: str | Path, store: str | Path | None
     info = struct.pack("<Q", len(name)) + name + struct.pack("<I", len(embd.dims))
     info += b"".join(struct.pack("<Q", d) for d in embd.dims) + struct.pack("<I", GGML_Q8_0)
 
-    kv_end, info_end = _header_ends(src)
+    _, info_end = _header_ends(src)
     size = src.stat().st_size
     align = gguf.alignment
     rel_new = -(-(size - gguf.data_offset) // align) * align
@@ -164,18 +164,27 @@ def run(args: argparse.Namespace) -> int:
             src = Path(args.gguf)
             default = "models/" + src.stem
         dst = Path(args.out or default + "-output.gguf")
+        pending: list[tuple[Path, str]] = []
         if official is not None:
             test_mf, control_mf = modelfile_paths(dst)
             for path in (test_mf, control_mf):
                 if path.exists():
                     raise AddOutputError(f"le Modelfile existe déjà : {path}")
             # Rendus avant l'écriture du GGUF : un gabarit non transcriptible n'écrit rien.
-            texts = [render_modelfile(dst, official), render_modelfile(src, official)]
+            pending = [
+                (test_mf, render_modelfile(dst, official)),
+                (control_mf, render_modelfile(src, official)),
+            ]
         res = add_output_weight(src, dst, args.ollama_models)
-        if official is not None:
-            for path, text in zip((test_mf, control_mf), texts, strict=True):
-                path.write_text(text, "utf-8")
+        try:
+            for path, text in pending:
                 modelfiles.append(path)
+                path.write_text(text, "utf-8")
+        except OSError:
+            # Rien à moitié : une relance trouverait sinon la sortie existante.
+            for path in [*modelfiles, dst]:
+                path.unlink(missing_ok=True)
+            raise
     except (OSError, ValueError, GGUFError, OllamaStoreError, ReportError) as exc:
         print(f"Erreur : {exc}", file=sys.stderr)
         return 2

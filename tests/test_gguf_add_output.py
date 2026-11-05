@@ -160,3 +160,22 @@ def test_cli_model_writes_faithful_modelfiles(tmp_path, capsys, monkeypatch):
     assert main(argv) == 2  # Modelfiles existants : rien n'est écrasé
     assert "Modelfile existe déjà" in capsys.readouterr().err
     assert not dst.exists()
+
+
+def test_cli_model_cleans_up_when_modelfile_write_fails(tmp_path, capsys, monkeypatch):
+    src = tmp_path / "in.gguf"
+    make(src, "Q8_0")
+    store = write_store(tmp_path / "store", src)
+    monkeypatch.chdir(tmp_path)
+    real_write = Path.write_text
+
+    def failing_write(self, *args, **kwargs):
+        if self.name.endswith("-temoin.Modelfile"):
+            raise OSError("disque plein")
+        return real_write(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", failing_write)
+    argv = ["gguf-add-output", "--model", "qwen3.5:0.8b", "--ollama-models", str(store)]
+    assert main(argv) == 2
+    assert "disque plein" in capsys.readouterr().err
+    assert list((tmp_path / "models").iterdir()) == []
