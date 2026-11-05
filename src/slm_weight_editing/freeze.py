@@ -227,10 +227,7 @@ def freeze_session(
             lock.__enter__()
         except HarnessError as exc:
             if attempt == _FREEZE_RETRIES - 1:
-                raise FreezeError(
-                    f"un lot tourne encore après {_FREEZE_RETRIES} essais ; gel non posé "
-                    f"(attendre la fin du lot ; verrou orphelin : Anaël lance session-unlock)"
-                ) from exc
+                raise FreezeError(f"gel non posé après {_FREEZE_RETRIES} essais : {exc}") from exc
             time.sleep(_FREEZE_DELAY)
             continue
         try:

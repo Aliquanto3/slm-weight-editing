@@ -47,6 +47,10 @@ LOCK_FILE = "session.lock"
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _ERROR_ACCESS_DENIED = 5
 _STILL_ACTIVE = 259
+_PID_MAX = 2**31 - 1
+# Âge minimal (s) d'un verrou illisible avant que session-unlock le retire : un porteur vivant
+# peut être entre la création du fichier et l'écriture de son contenu.
+_UNREADABLE_LOCK_MIN_AGE = 60.0
 REGISTRY_FILE = "registry.jsonl"
 # Espace de séance (story 5) : écrit par `session-workspace`, il fixe séance, racine et données
 # des commandes lancées depuis l'espace (l'éditeur ne choisit ni une autre séance ni d'autres
@@ -147,7 +151,7 @@ def _write_state(directory: Path, state: SessionState) -> None:
 
 def pid_alive(pid: int) -> bool:
     """Le processus `pid` existe-t-il ? Sans dépendance, sous Windows comme sous POSIX."""
-    if pid <= 0:
+    if pid <= 0 or pid > _PID_MAX:
         return False
     if sys.platform == "win32":
         import ctypes
@@ -185,6 +189,7 @@ def read_lock(lock: Path) -> dict | None:
     if (
         not isinstance(data, dict)
         or type(data.get("pid")) is not int
+        or not 0 < data["pid"] <= _PID_MAX
         or not isinstance(data.get("acquired_at"), str)
     ):
         return None
@@ -196,7 +201,7 @@ def _lock_refusal(lock: Path) -> str:
     if data is None:
         return (
             f"un lot tourne peut-être : {lock} est illisible (ancien format, vide ou corrompu) ; "
-            "seul Anaël peut le retirer, à la main"
+            "seul Anaël peut le retirer, par `slm-weight-editing session-unlock`"
         )
     pid, since = data["pid"], data["acquired_at"]
     if pid_alive(pid):
@@ -215,12 +220,20 @@ def _session_lock(directory: Path):
         fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError as exc:
         raise HarnessError(_lock_refusal(lock)) from exc
-    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
-        json.dump({"pid": os.getpid(), "acquired_at": _now()}, f)
+    mine = {"pid": os.getpid(), "acquired_at": _now()}
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(mine, f)
+    except BaseException:
+        lock.unlink(missing_ok=True)
+        raise
     try:
         yield
     finally:
-        lock.unlink(missing_ok=True)
+        # Ne retire que son propre verrou : s'il a été retiré puis repris par un autre
+        # processus entre-temps, le verrou de ce dernier reste en place.
+        if read_lock(lock) == mine:
+            lock.unlink(missing_ok=True)
 
 
 def unlock_session(
@@ -241,14 +254,24 @@ def unlock_session(
             f"le processus {data['pid']} est vivant (verrou pris le {data['acquired_at']}) : "
             "rien n'est retiré"
         )
+    if data is None:
+        try:
+            age = time.time() - lock.stat().st_mtime
+        except FileNotFoundError:
+            return None
+        if age < _UNREADABLE_LOCK_MIN_AGE:
+            raise HarnessError(
+                f"verrou illisible pris il y a {age:.0f} s : un lot l'écrit peut-être encore ; "
+                f"rien n'est retiré (réessayer après {_UNREADABLE_LOCK_MIN_AGE:.0f} s)"
+            )
     entry = {
         "event": "unlock",
         "pid": data["pid"] if data else None,
         "lock_acquired_at": data["acquired_at"] if data else None,
         "at": _now(),
     }
-    _append_journal(directory, entry)
     lock.unlink(missing_ok=True)
+    _append_journal(directory, entry)
     return entry
 
 
@@ -842,10 +865,8 @@ def run(args: argparse.Namespace) -> int:
             if entry is None:
                 print(f"Séance {args.session} : aucun verrou à retirer")
             else:
-                print(
-                    f"Séance {args.session} : verrou retiré (PID {entry['pid']} mort), "
-                    "ligne unlock journalisée"
-                )
+                what = f"PID {entry['pid']} mort" if entry["pid"] else "verrou illisible"
+                print(f"Séance {args.session} : verrou retiré ({what}), ligne unlock journalisée")
         else:
             root = bind_workspace(args.session, args.sessions_root)
             directory = session_dir(args.session, root)

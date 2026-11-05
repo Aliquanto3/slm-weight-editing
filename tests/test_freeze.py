@@ -207,7 +207,9 @@ def test_running_batch_lock_gives_a_bounded_clear_error(sess, monkeypatch):
     monkeypatch.setattr(freeze, "_FREEZE_RETRIES", 3)
     monkeypatch.setattr(freeze, "_FREEZE_DELAY", 0)
     (sess["dir"] / harness.LOCK_FILE).write_text("", "utf-8")
-    with pytest.raises(FreezeError, match="un lot tourne encore après 3 essais"):
+    with pytest.raises(
+        FreezeError, match="gel non posé après 3 essais : un lot tourne peut-être.*session-unlock"
+    ):
         freeze_it(sess)
     assert harness.read_state(sess["dir"]).frozen is False
 
