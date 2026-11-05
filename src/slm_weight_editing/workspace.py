@@ -17,7 +17,17 @@ import sys
 from pathlib import Path
 
 from slm_weight_editing import harness
-from slm_weight_editing.script_runner import DATA_DIR, SCRIPTS_DIR, _inside, _python_roots
+from slm_weight_editing.script_runner import (
+    DATA_DIR,
+    DEFAULT_MAX_TIMEOUT,
+    DEFAULT_THREADS,
+    DEFAULT_TIMEOUT,
+    RUNS_DIR,
+    SCRIPTS_DIR,
+    _inside,
+    _python_roots,
+    check_limits,
+)
 
 SESSIONS_DIR = harness.WORKSPACE_SESSIONS_DIR
 NOTES_DIR = "notes"
@@ -138,6 +148,7 @@ def build_settings(workspace: Path, repo: Path, session_id: str, cuda: bool = Fa
         "Edit(./.claude/**)",
         "Edit(./CLAUDE.md)",
         "Edit(./CONSIGNE.md)",
+        f"Edit(./{RUNS_DIR}/**)",
         f"Edit(./{DATA_DIR}/**)",
         f"Edit({sessions}/{harness.REGISTRY_FILE})",
         f"Edit({sessions}/*/{harness.STATE_FILE})",
@@ -171,8 +182,21 @@ def build_settings(workspace: Path, repo: Path, session_id: str, cuda: bool = Fa
     }
 
 
+def _minutes(seconds: float) -> str:
+    return f"{seconds / 60:g} min"
+
+
 def render(
-    name: str, *, session_id: str, budget: int, repo: Path, data: list[str], cuda: bool = False
+    name: str,
+    *,
+    session_id: str,
+    budget: int,
+    repo: Path,
+    data: list[str],
+    cuda: bool = False,
+    threads: int = DEFAULT_THREADS,
+    timeout: float = DEFAULT_TIMEOUT,
+    max_timeout: float = DEFAULT_MAX_TIMEOUT,
 ) -> str:
     text = (TEMPLATES / name).read_text(encoding="utf-8")
     listing = ", ".join(f"`{DATA_DIR}/{n}`" for n in data)
@@ -181,6 +205,9 @@ def render(
         ("<BUDGET>", str(budget)),
         ("<EXTRA>", CUDA_EXTRA if cuda else ""),
         ("<DONNEES>", listing),
+        ("<SCRIPT_THREADS>", str(threads)),
+        ("<SCRIPT_TIMEOUT>", _minutes(timeout)),
+        ("<SCRIPT_MAX_TIMEOUT>", _minutes(max_timeout)),
     ):
         text = text.replace(key, value)
     return text
@@ -215,12 +242,16 @@ def create_workspace(
     base_revision: str | None = None,
     repo: str | Path | None = None,
     cuda: bool = False,
+    script_threads: int = DEFAULT_THREADS,
+    script_timeout: float = DEFAULT_TIMEOUT,
+    script_max_timeout: float = DEFAULT_MAX_TIMEOUT,
 ) -> Path:
     """Ouvre la séance dans `<out>/sessions` et écrit l'espace de l'éditeur ; renvoie `<out>`."""
     if cuda and not cuda_platform():
         # L'extra `cuda` ne pointe vers une roue CUDA que sous Windows (cu132) : ailleurs,
         # `uv sync --extra cuda` échoue (macOS) ou installe torch CPU (Linux).
         raise harness.HarnessError("--cuda refusé : l'extra cuda ne vise que Windows")
+    check_limits(script_threads, script_timeout, script_max_timeout)
     out = Path(out).resolve()
     repo = repo_root() if repo is None else Path(repo).resolve()
     check_location(out, repo)
@@ -247,6 +278,9 @@ def create_workspace(
         "data_dir": str((out / DATA_DIR).resolve()),
         "repo": str(repo),
         "cuda": cuda,
+        "script_threads": script_threads,
+        "script_timeout": script_timeout,
+        "script_max_timeout": script_max_timeout,
     }
     (out / harness.WORKSPACE_FILE).write_text(
         json.dumps(info, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
@@ -261,7 +295,17 @@ def create_workspace(
     )
     names = [f.name for f in files]
     for name in ("CLAUDE.md", "CONSIGNE.md"):
-        text = render(name, session_id=session_id, budget=budget, repo=repo, data=names, cuda=cuda)
+        text = render(
+            name,
+            session_id=session_id,
+            budget=budget,
+            repo=repo,
+            data=names,
+            cuda=cuda,
+            threads=script_threads,
+            timeout=script_timeout,
+            max_timeout=script_max_timeout,
+        )
         (out / name).write_text(text, encoding="utf-8", newline="\n")
     return out
 
@@ -286,6 +330,24 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
         action="store_true",
         help="poste avec GPU : les commandes de l'éditeur portent --extra cuda",
     )
+    p.add_argument(
+        "--script-threads",
+        type=int,
+        default=DEFAULT_THREADS,
+        help="plafond de threads de calcul (BLAS) des scripts (défaut 4)",
+    )
+    p.add_argument(
+        "--script-timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT,
+        help="délai par défaut d'un script, en secondes (défaut 900)",
+    )
+    p.add_argument(
+        "--script-max-timeout",
+        type=float,
+        default=DEFAULT_MAX_TIMEOUT,
+        help="délai maximum qu'un script peut demander, en secondes (défaut 3600)",
+    )
     p.set_defaults(func=run)
 
 
@@ -299,6 +361,9 @@ def run(args: argparse.Namespace) -> int:
             args.data,
             base_revision=args.base_revision,
             cuda=args.cuda,
+            script_threads=args.script_threads,
+            script_timeout=args.script_timeout,
+            script_max_timeout=args.script_max_timeout,
         )
     except harness.HarnessError as exc:
         print(f"Erreur : {exc}", file=sys.stderr)

@@ -24,7 +24,7 @@ uv run<EXTRA> slm-weight-editing run-script scripts/<nom>.py --session <ID_SEANC
 
 - `run-batch` est la seule voie d'exécution du modèle : jeux `gsm8k` ou `math`, split `train` seulement, au plus 512 problèmes par lot, génération gloutonne, 4096 jetons au plus, poids rechargés depuis `work/` à chaque lot. Données train disponibles : <DONNEES>.
 - `session-status` donne le budget, les lots consommés et le gel.
-- `run-script` est la seule façon d'exécuter du Python. Il ne consomme pas de lot, mais chaque exécution est journalisée avec une copie du script.
+- `run-script` est la seule façon d'exécuter du Python. Il ne consomme pas de lot, mais chaque exécution est journalisée avec une copie du script. Chaque script a un délai de <SCRIPT_TIMEOUT> (un script plus long est arrêté ; `--timeout <secondes>` choisit un autre délai, au plus <SCRIPT_MAX_TIMEOUT>, sinon refus) et au plus <SCRIPT_THREADS> threads de calcul, non modifiables. Sa sortie complète (stdout et stderr) est écrite dans `runs/<horodatage>-<script>.log` : lis ce fichier avec l'outil de lecture ; la console et le journal n'en gardent qu'un extrait.
 - Les sorties de chaque lot sont dans `sessions/<ID_SEANCE>/journal.jsonl` : lis-le avec l'outil de lecture de fichiers, jamais par une commande.
 - Écris les commandes telles quelles, sans variable d'environnement devant, sans `cd`, sans tube ni redirection.
 

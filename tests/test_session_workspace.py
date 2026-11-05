@@ -52,11 +52,13 @@ def journal(ws: Path) -> list[dict]:
 
 
 def snapshot(root: Path) -> dict[str, bytes]:
-    """Tout l'arbre sous `root`, sauf le journal et les copies de scripts (du lanceur)."""
+    """Tout l'arbre sous `root`, sauf le journal, les copies de scripts et runs/ (du lanceur)."""
     out = {}
     for p in sorted(root.rglob("*")):
         rel = p.relative_to(root).as_posix()
-        if p.is_file() and not rel.endswith("journal.jsonl") and "/s1/scripts/" not in rel:
+        runs = "/runs/" in rel or rel.startswith("runs/")
+        runner = rel.endswith("journal.jsonl") or "/s1/scripts/" in rel or runs
+        if p.is_file() and not runner:
             out[rel] = p.read_bytes()
     return out
 
@@ -673,3 +675,169 @@ def test_settings_deny_uv_redirection(ws, tool):
     deny = json.loads((ws / ".claude" / "settings.json").read_text("utf-8"))["permissions"]["deny"]
     for needle in ("UV_", "--project", "--directory"):
         assert f"{tool}(*{needle}*)" in deny, needle
+
+
+# CAP-8 : threads plafonnés, délai par script, sortie dans un fichier.
+
+THREAD_VARS = script_runner._THREAD_VARS
+
+
+def make_ws(tmp_path, base, **kwargs) -> Path:
+    data = tmp_path / "src-data" / "gsm8k-train.jsonl"
+    data.parent.mkdir()
+    data.write_text('{"split": "train", "question": "1+1"}\n', encoding="utf-8")
+    return workspace.create_workspace(tmp_path / "ws", "s1", 10, base, [data], **kwargs)
+
+
+def test_threads_default_four_in_child_before_numpy(ws):
+    # threadpoolctl n'est pas une dépendance (et son import est refusé dans l'enfant) : la valeur
+    # effective des bibliothèques natives vient de ces variables, lues au chargement de numpy.
+    code = (
+        "import os\nimport numpy as np\n"
+        "print(sorted((k, v) for k, v in os.environ.items() if k.endswith('_NUM_THREADS')))\n"
+        "print((np.ones((64, 64)) @ np.ones((64, 64))).sum())"
+    )
+    entry = run(ws, "t.py", code)
+    assert entry["returncode"] == 0
+    for var in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):
+        assert f"('{var}', '4')" in entry["output"]
+    assert "262144.0" in entry["output"]
+
+
+def test_threads_env_value_comes_from_workspace_config(tmp_path, base):
+    ws = make_ws(tmp_path, base, script_threads=2)
+    assert json.loads((ws / "workspace.json").read_text("utf-8"))["script_threads"] == 2
+    entry = run(ws, "t.py", "import os\nprint(os.environ['OPENBLAS_NUM_THREADS'])")
+    assert entry["output"].strip() == "2"
+
+
+def test_script_cannot_raise_threads(ws):
+    code = (
+        "import os\nos.environ['OPENBLAS_NUM_THREADS'] = '64'\n"
+        "import numpy as np\nprint(os.environ['OPENBLAS_NUM_THREADS'])\n"
+        "import threadpoolctl\n"
+    )
+    entry = run(ws, "t.py", code)
+    assert entry["refused"] is True and "threadpoolctl" in entry["output"]
+    code = 'import numpy\nc = numpy._core._internal.ctypes\nc.CDLL("x.dll").f(64)'
+    entry = run(ws, "c.py", code)
+    assert entry["refused"] is True, entry["output"]
+    assert "ctypes" in entry["output"]
+    for flag in ("--threads", "--script-threads"):
+        with pytest.raises(SystemExit):
+            main(["run-script", "scripts/t.py", "--session", "s1", flag, "64"])
+
+
+def test_limits_defaults_and_creation(tmp_path, base):
+    ws = make_ws(tmp_path, base)
+    info = json.loads((ws / "workspace.json").read_text("utf-8"))
+    assert (info["script_threads"], info["script_timeout"], info["script_max_timeout"]) == (
+        4,
+        900,
+        3600,
+    )
+    consigne = (ws / "CONSIGNE.md").read_text("utf-8")
+    assert "15 min" in consigne and "60 min" in consigne and "4 threads" in consigne
+    assert "runs/<horodatage>-<script>.log" in consigne and "<SCRIPT_" not in consigne
+    assert "<SCRIPT_" not in (ws / "CLAUDE.md").read_text("utf-8")
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"script_threads": 0}, "--script-threads refusé"),
+        ({"script_timeout": 0}, "--script-timeout refusé"),
+        ({"script_max_timeout": -1}, "--script-max-timeout refusé"),
+        ({"script_timeout": 7200}, "dépasse le délai maximum 3600 s"),
+    ],
+)
+def test_invalid_limits_refused_at_creation(tmp_path, base, kwargs, message):
+    with pytest.raises(harness.HarnessError, match=message):
+        make_ws(tmp_path, base, **kwargs)
+    assert not (tmp_path / "ws").exists()
+
+
+def test_timeout_default_and_max(tmp_path, base):
+    ws = make_ws(tmp_path, base, script_timeout=1, script_max_timeout=5)
+    (ws / "scripts" / "slow.py").write_text("import time\ntime.sleep(30)", encoding="utf-8")
+    slow = script_runner.run_script("scripts/slow.py", "s1", workspace=ws)
+    assert slow["timed_out"] is True and slow["timeout"] == 1
+    assert journal(ws)[-1]["timed_out"] is True
+    n = len(journal(ws))
+    with pytest.raises(harness.HarnessError, match=r"délai maximum.*\(5 s\).*au plus 5 s"):
+        script_runner.run_script("scripts/slow.py", "s1", workspace=ws, timeout=6)
+    for bad in (0, -3):
+        with pytest.raises(harness.HarnessError, match="strictement positif"):
+            script_runner.run_script("scripts/slow.py", "s1", workspace=ws, timeout=bad)
+    assert len(journal(ws)) == n  # refus sans exécution ni journal
+
+
+def test_default_limits_for_workspace_without_limits_keys(ws):
+    info = json.loads((ws / "workspace.json").read_text("utf-8"))
+    for k in ("script_threads", "script_timeout", "script_max_timeout"):
+        del info[k]
+    (ws / "workspace.json").write_text(json.dumps(info), encoding="utf-8")
+    assert script_runner.script_limits(harness.find_workspace(ws)[1]) == (4, 900.0, 3600.0)
+
+
+def test_timeout_kills_process_tree():
+    if sys.platform == "win32":
+        pytest.skip("arbre vérifié sous POSIX (le script de l'éditeur ne lance pas de processus)")
+    import subprocess
+    import time
+
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import subprocess,sys,time;"
+            "subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']);time.sleep(60)",
+        ],
+        start_new_session=True,
+    )
+    time.sleep(1)
+    script_runner._kill_tree(proc)
+    assert proc.wait(timeout=10) != 0
+
+
+def test_full_output_goes_to_log_file(ws):
+    import hashlib
+
+    entry = run(ws, "loud.py", "import sys\nprint('x' * 100000)\nprint('err', file=sys.stderr)")
+    log = ws / entry["log"]
+    assert re.fullmatch(r"runs/\d{8}T\d{12}Z-loud\.log", entry["log"])
+    data = log.read_bytes()
+    assert b"x" * 100000 in data and b"err" in data
+    assert len(data) == entry["output_bytes"] == entry["log_bytes"] > script_runner.MAX_OUTPUT
+    assert entry["log_sha256"] == hashlib.sha256(data).hexdigest()
+    assert entry["log_truncated"] is False
+    assert len(entry["output"]) == script_runner.MAX_OUTPUT
+    assert journal(ws)[-1]["log_sha256"] == entry["log_sha256"]
+    # Deux exécutions : deux fichiers, aucun écrasé.
+    second = run(ws, "loud.py", "print('y')")
+    assert second["log"] != entry["log"] and log.read_bytes() == data
+
+
+def test_log_file_is_capped(ws):
+    (ws / "scripts" / "big.py").write_text("print('z' * 50000)", encoding="utf-8")
+    entry = script_runner.run_script("scripts/big.py", "s1", workspace=ws, max_log_bytes=1000)
+    assert entry["log_bytes"] == 1000 and entry["log_truncated"] is True
+    assert entry["output_bytes"] > 50000 and (ws / entry["log"]).stat().st_size == 1000
+
+
+def test_runs_dir_not_writable_by_editor(ws):
+    deny = json.loads((ws / ".claude" / "settings.json").read_text("utf-8"))["permissions"]["deny"]
+    assert "Edit(./runs/**)" in deny
+    entry = run(ws, "w.py", "open('runs/x.log', 'w')")
+    assert entry["refused"] is True and not (ws / "runs" / "x.log").exists()
+
+
+def test_cli_prints_log_path(ws, monkeypatch, capsys):
+    monkeypatch.chdir(ws)
+    (ws / "scripts" / "ok.py").write_text("print('a' * 30000)", encoding="utf-8")
+    args = ["run-script", "scripts/ok.py", "--session", "s1", "--sessions-root", "sessions"]
+    assert main(args + ["--timeout", "99999"]) != 0
+    assert "délai maximum" in capsys.readouterr().err
+    assert main(args) == 0
+    out = capsys.readouterr().out
+    assert "sortie complète dans runs/" in out

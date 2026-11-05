@@ -19,6 +19,7 @@ import os
 import subprocess
 import sys
 import threading
+from datetime import UTC, datetime
 from pathlib import Path
 
 from slm_weight_editing import harness
@@ -27,8 +28,21 @@ from slm_weight_editing._sandbox import REFUSED
 SCRIPTS_DIR = "scripts"
 DATA_DIR = "data"
 COPIES_DIR = "scripts"
-MAX_OUTPUT = 20_000
-DEFAULT_TIMEOUT = 1800
+MAX_OUTPUT = 20_000  # extrait de la sortie gardé dans le journal
+RUNS_DIR = "runs"  # sortie complète de chaque exécution, lisible par l'éditeur
+MAX_LOG_BYTES = 50 * 1024 * 1024  # au-delà, le fichier de sortie est coupé (disque protégé)
+DEFAULT_THREADS = 4
+DEFAULT_TIMEOUT = 900  # 15 min
+DEFAULT_MAX_TIMEOUT = 3600  # 60 min
+# Variables lues par les bibliothèques de calcul natives au chargement de numpy.
+_THREAD_VARS = (
+    "OPENBLAS_NUM_THREADS",
+    "OMP_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "BLIS_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+)
 _BOOT = Path(__file__).with_name("_sandbox.py")
 # Seules variables transmises : de quoi démarrer l'interpréteur sous Windows.
 _ENV_KEEP = ("SYSTEMROOT", "SystemRoot", "WINDIR")
@@ -43,9 +57,58 @@ def _inside(path: Path, base: Path) -> bool:
     return path == base or base in path.parents
 
 
-def child_env() -> dict[str, str]:
-    """Environnement du sous-processus : rien de l'appelant (PYTHONPATH, PYTHONHOME...)."""
-    return {k: os.environ[k] for k in _ENV_KEEP if k in os.environ}
+def child_env(threads: int = DEFAULT_THREADS) -> dict[str, str]:
+    """Environnement du sous-processus : rien de l'appelant (PYTHONPATH, PYTHONHOME...).
+
+    Les variables de threads sont posées avant le démarrage de l'enfant, donc avant le
+    préchargement de numpy par l'amorce ; un script les modifie sans effet après coup.
+    """
+    env = {k: os.environ[k] for k in _ENV_KEEP if k in os.environ}
+    env.update({k: str(threads) for k in _THREAD_VARS})
+    return env
+
+
+def script_limits(info: dict | None) -> tuple[int, float, float]:
+    """(threads, délai par défaut, délai maximum) de `workspace.json` ; défauts hors espace."""
+    info = info or {}
+    return (
+        int(info.get("script_threads", DEFAULT_THREADS)),
+        float(info.get("script_timeout", DEFAULT_TIMEOUT)),
+        float(info.get("script_max_timeout", DEFAULT_MAX_TIMEOUT)),
+    )
+
+
+def check_limits(threads: int, timeout: float, max_timeout: float) -> None:
+    """Valide les trois réglages (création de l'espace) ; lève HarnessError."""
+    if threads < 1:
+        raise harness.HarnessError(f"--script-threads refusé : {threads} (au moins 1)")
+    if not timeout > 0:
+        raise harness.HarnessError(f"--script-timeout refusé : {timeout:g} s (strictement positif)")
+    if not max_timeout > 0:
+        raise harness.HarnessError(f"--script-max-timeout refusé : {max_timeout:g} s (positif)")
+    if timeout > max_timeout:
+        raise harness.HarnessError(
+            f"--script-timeout refusé : {timeout:g} s dépasse le délai maximum {max_timeout:g} s"
+        )
+
+
+def _kill_tree(proc: subprocess.Popen) -> None:
+    """Arrête le script et tous ses descendants."""
+    if sys.platform == "win32":
+        subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    else:
+        import signal
+
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+    proc.kill()
 
 
 def _resolve_script(workspace: Path, script: str) -> Path:
@@ -62,13 +125,21 @@ def _resolve_script(workspace: Path, script: str) -> Path:
     return path
 
 
-def _bounded_read(stream, limit: int) -> tuple[bytes, int]:
-    kept, total = bytearray(), 0
+def _bounded_read(stream, limit: int, log=None, log_limit: int = MAX_LOG_BYTES):
+    """Lit tout le flux ; garde `limit` octets, écrit au plus `log_limit` octets dans `log`.
+
+    Renvoie (extrait, total lu, octets écrits dans le fichier).
+    """
+    kept, total, written = bytearray(), 0, 0
     while chunk := stream.read(65536):
         total += len(chunk)
         if len(kept) < limit:
             kept += chunk[: limit - len(kept)]
-    return bytes(kept), total
+        if log is not None and written < log_limit:
+            part = chunk[: log_limit - written]
+            log.write(part)
+            written += len(part)
+    return bytes(kept), total, written
 
 
 def run_script(
@@ -77,8 +148,9 @@ def run_script(
     *,
     sessions_root: str | Path | None = None,
     workspace: str | Path | None = None,
-    timeout: float = DEFAULT_TIMEOUT,
+    timeout: float | None = None,
     max_output: int = MAX_OUTPUT,
+    max_log_bytes: int = MAX_LOG_BYTES,
 ) -> dict:
     """Exécute `scripts/<x>.py` sous le crochet d'audit ; renvoie l'événement `script`."""
     workspace = Path.cwd() if workspace is None else Path(workspace)
@@ -87,6 +159,16 @@ def run_script(
     found = harness.find_workspace(workspace)
     if found is not None and found[0] != workspace:
         raise harness.HarnessError(f"run-script se lance depuis l'espace de séance {found[0]}")
+    threads, default_timeout, max_timeout = script_limits(found[1] if found else None)
+    if timeout is None:
+        timeout = default_timeout
+    if not timeout > 0:
+        raise harness.HarnessError(f"--timeout refusé : {timeout:g} s (strictement positif)")
+    if timeout > max_timeout:
+        raise harness.HarnessError(
+            f"--timeout refusé : {timeout:g} s dépasse le délai maximum de l'espace "
+            f"({max_timeout:g} s) ; valeur permise : au plus {max_timeout:g} s"
+        )
     root = harness.bind_workspace(
         session_id, sessions_root, cwd=workspace, default_root=harness.WORKSPACE_SESSIONS_DIR
     )
@@ -126,21 +208,27 @@ def run_script(
         proc = subprocess.Popen(
             cmd,
             cwd=workspace,
-            env=child_env(),
+            env=child_env(threads),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            start_new_session=sys.platform != "win32",
         )
         killed = threading.Event()
 
         def _kill() -> None:
             killed.set()
-            proc.kill()
+            _kill_tree(proc)
 
+        runs = workspace / RUNS_DIR
+        runs.mkdir(exist_ok=True)
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+        log_path = runs / f"{stamp}-{path.stem}.log"
         timer = threading.Timer(timeout, _kill)
         timer.start()
         try:
-            output, total = _bounded_read(proc.stdout, max_output)
+            with open(log_path, "xb") as log:
+                output, total, written = _bounded_read(proc.stdout, max_output, log, max_log_bytes)
             returncode = proc.wait()
         finally:
             timer.cancel()
@@ -157,6 +245,11 @@ def run_script(
             "timed_out": timed_out,
             "output": text,
             "output_bytes": total,
+            "log": f"{RUNS_DIR}/{log_path.name}",
+            "log_bytes": written,
+            "log_sha256": hashlib.sha256(log_path.read_bytes()).hexdigest(),
+            "log_truncated": written < total,
+            "timeout": timeout,
             "started_at": started,
             "finished_at": harness._now(),
         }
@@ -179,7 +272,11 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     p.add_argument(
         "--sessions-root", help="dossier des séances (celui de workspace.json dans un espace)"
     )
-    p.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help="secondes (défaut 1800)")
+    p.add_argument(
+        "--timeout",
+        type=float,
+        help="secondes ; défaut et maximum fixés à la création de l'espace (15 et 60 min)",
+    )
     p.set_defaults(func=run)
 
 
@@ -196,9 +293,14 @@ def run(args: argparse.Namespace) -> int:
         return 1
     sys.stdout.write(entry["output"])
     if entry["output_bytes"] > len(entry["output"].encode("utf-8")):
-        print(f"\n[sortie tronquée : {entry['output_bytes']} octets au total]")
+        print(
+            f"\n[extrait : {entry['output_bytes']} octets au total ; "
+            f"sortie complète dans {entry['log']}]"
+        )
+    if entry["log_truncated"]:
+        print(f"[fichier coupé à {entry['log_bytes']} octets]", file=sys.stderr)
     if entry["timed_out"]:
-        print(f"Erreur : script arrêté après {args.timeout:g} s", file=sys.stderr)
+        print(f"Erreur : script arrêté après {entry['timeout']:g} s", file=sys.stderr)
     status = "refusé" if entry["refused"] else f"code {entry['returncode']}"
     print(f"Script {entry['script']} ({entry['sha256'][:12]}) : {status}", file=sys.stderr)
     code = entry["returncode"]
