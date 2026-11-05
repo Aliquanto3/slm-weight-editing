@@ -706,7 +706,7 @@ def test_consigne_states_protocol():
     for needle in (
         "run-batch",
         "session-status",
-        "run-script scripts/<nom>.py",
+        "run-script scripts/NOM.py",
         "uv run<EXTRA> slm-weight-editing",
         "--sessions-root sessions",
         "<BUDGET>",
@@ -959,11 +959,44 @@ def test_consigne_commands_pass_the_audit_once_placeholders_are_filled():
     assert [c.split("--thinking ")[1].split()[0] for c in commands[:2]] == ["on", "off"]
     for command in commands:
         filled = (
-            command.replace("<fichier>", "gsm8k-train.jsonl")
-            .replace("<nom>", "edit")
+            command.replace("FICHIER.jsonl", "gsm8k-train.jsonl")
+            .replace("NOM.py", "edit.py")
             .replace("[--start N] [--count N]", "--start 0 --count 8")
         )
         assert audit.check_shell(filled, CTX_S1) == [], filled
+
+
+@pytest.mark.parametrize("cuda", [False, True])
+@pytest.mark.parametrize("name", ["CONSIGNE.md", "CLAUDE.md"])
+def test_rendered_instructions_have_no_shell_metacharacter_templates(name, cuda):
+    # Chaque commande rendue, en bloc de code ou entre accents graves, recopiée littéralement,
+    # passe l'audit. Seules les options entre crochets (facultatives) sont retirées.
+    from slm_weight_editing.workspace import render
+
+    text = render(
+        name, session_id="s1", budget=10, repo=REPO, data=["gsm8k-train.jsonl"], cuda=cuda
+    )
+    blocks = text.split("```")[1::2]
+    lines = [line for block in blocks for line in block.splitlines()]
+    lines += re.findall(r"`([^`\n]+)`", re.sub(r"```.*?```", "", text, flags=re.S))
+    commands = [
+        re.sub(r"\s*\[[^\]]*\]", "", line).strip()
+        for line in lines
+        if line.strip().startswith("uv run")
+    ]
+    subs = {c.split("slm-weight-editing ")[1].split()[0] for c in commands}
+    assert subs == {"run-batch", "session-status", "run-script"}, commands
+    assert {"--thinking on", "--thinking off"} <= {
+        m for c in commands for m in re.findall(r"--thinking \w+", c)
+    }
+    ctx = CTX_CUDA if cuda else CTX_S1
+    for command in commands:
+        assert "<" not in command and ">" not in command, command
+        assert audit.check_shell(command, ctx) == [], command
+    if name == "CONSIGNE.md":
+        timeout = "uv run slm-weight-editing run-script scripts/NOM.py --session s1"
+        assert "`--timeout SECONDES`" in text
+        assert audit.check_shell(f"{timeout} --sessions-root sessions --timeout 600", CTX_S1) == []
 
 
 @pytest.mark.parametrize("name", ["CONSIGNE.md", "CLAUDE.md"])

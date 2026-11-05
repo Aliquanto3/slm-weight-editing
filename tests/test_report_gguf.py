@@ -148,6 +148,16 @@ def test_modelfile_lists_template_system_and_stop(tmp_path):
     assert 'PARAMETER stop "<|im_end|>"\nPARAMETER stop "<x>"\nPARAMETER num_ctx 4096\n' in text
 
 
+def test_modelfile_bytes_have_no_added_cr_but_keep_template_cr(tmp_path):
+    # Octets exacts (LF) sous tout OS ; le CR du gabarit d'origine est conservé.
+    s = build(tmp_path, template="a\r\nb\n{{ .Prompt }}", system="Sois bref.")
+    result = run(s, tmp_path / "out")
+    raw = result.modelfile.read_bytes()
+    assert b"\r" not in result.diff.read_bytes() and b"\r" not in result.fidelity.read_bytes()
+    assert raw.count(b"\r") == 1
+    assert b'TEMPLATE """a\r\nb\n{{ .Prompt }}"""\nSYSTEM """Sois bref."""\n' in raw
+
+
 def test_wrong_sha_refuses_and_writes_nothing(synth, tmp_path):
     out = tmp_path / "out"
     with pytest.raises(ShaMismatchError, match="report refusé"):
