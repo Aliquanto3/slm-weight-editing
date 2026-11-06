@@ -1,6 +1,6 @@
 # Statuts des epics 1 (spec-slm-weight-editing) et 2 (spec-harnais-v2) ; id N de stories.yaml = story E.N. Mis à jour par l orchestrateur du run.
 generated: 2026-11-04 08:48
-last_updated: 2026-11-06 07:06
+last_updated: 2026-11-06 07:30
 project: slm-weight-editing
 tracking_system: file-system
 story_location: _bmad-output/specs/spec-slm-weight-editing
@@ -29,14 +29,14 @@ action_items:
     action: "A-1 Stabiliser test_probe (référence de même forme de matmul, ou tolérance
       1 ulp décidée par Anaël et écrite dans CAP-1)"
     owner: "dev-story + Anaël"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-11-06.md"
   - id: "epic-2-retro-item-2-a-2-relire-3c154c2-repli-de-hook_python"
     epic: 2
     action: "A-2 Relire 3c154c2 (repli de hook_python) et trancher contre l amendement
       6 de la fiche 2.5"
     owner: "orchestrateur puis Anaël"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-11-06.md"
   - id: "epic-2-retro-item-3-a-3-liste-de-contrôle-posix-dans-le-prom"
     epic: 2
