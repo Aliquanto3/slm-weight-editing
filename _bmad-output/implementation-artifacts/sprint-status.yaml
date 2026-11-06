@@ -13,12 +13,12 @@ development_status:
   1-5-protocole-seance-claude: done
   1-6-comparaison-deux-editions: done
   1-7-campagne-lot-1-banc: backlog
-  epic-2: in-progress
+  epic-2: done
   2-1-verrou-pid-session-unlock: done
   2-2-run-script-threads-delai-sortie: done
   2-3-run-batch-thinking: done
-  2-4-probe-budget: backlog
-  2-5-espace-lecture-libre-operateur: backlog
-  2-6-audit-faux-positifs-decodage: backlog
-  2-7-essai-ollama-output-weight: review
-  2-8-lm-head-detache: backlog
+  2-4-probe-budget: done
+  2-5-espace-lecture-libre-operateur: done
+  2-6-audit-faux-positifs-decodage: done
+  2-7-essai-ollama-output-weight: done
+  2-8-lm-head-detache: done
