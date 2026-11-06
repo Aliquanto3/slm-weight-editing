@@ -109,3 +109,15 @@ Base : `origin/main` (2d79040, story 2.8) fusionnée sans conflit avant la revue
 - Pre-existing · low · revue · reporté · alias de fonctions interdites (`from builtins import compile as c`, `import builtins as re`) : l'audit textuel ne suit pas les alias, avant comme après la story.
 - Complexité : 1 constat, corrigé · `_extends` comparait toutes les paires de textes de deux appels ; l'index des textes vus ramène les suites à O(textes × 4).
 - Report · critère 8 (rejeu de la transcription s1) toujours à faire par Anaël.
+
+### Passe 2 (2026-11-06, SHA revu a56afda)
+
+Relu : `git diff e0a1cf8..a56afda`. Batterie de 36 formes d'écriture contre `check_code_content` (`r+`, `rb+`, mode conditionnel, `mode=`, `io`/`codecs`/`Path.open`, `os.fdopen`, `opener=`, chaînage `or`, `lambda`, compréhension, `with a, b`, lignes physiques multiples, `\`, `;`, `\n` dans une chaîne, code cassé) : aucune régression par rapport à e0a1cf8 ; les trous ci-dessous existaient déjà ou tiennent au correctif de la passe 1.
+
+- Important · medium · revue · corrigé · le correctif 1 de la passe 1 ne tenait pas seul : `open(Path("…journal.jsonl").resolve(), "a")` sans `.write` sur une autre ligne n'était pas signalé, le déclencheur `_open_writes` gardant `[^)]*` (même cas `open(str(j), "w")`). `_open_writes` ajoute l'AST (texte entier, sinon chaque ligne analysable) à la regex ; `os.open(p, os.O_RDONLY)` reste une lecture.
+- Important · medium · revue · corrigé · `_line_only_reads` acceptait tout appel autre qu'`open` sur une ligne de lecture et ne regardait que l'affectation de tête : `os.link(j, open(n).read())`, `open(j, opener=ev)` (ou `opener` en 8e position), `for p in [j]: …`, `with open(j) as f: name = f.name`, `x = [p for p in [j] if …]`, `d[j] = …` passaient. Liste blanche d'appels, `open` limité à `mode`/`buffering`/`encoding`/`errors`/`newline` et trois positionnels, toute affectation de l'arbre vérifiée (cibles nommées seulement), itérables de `for` et de compréhension limités à un nom ou un résultat de lecture, ni `def`/`lambda`/`import`.
+- Important · low · revue · corrigé · `scan_probe_suites` : un rescorage intercalé réattribuait le texte à sa propre chaîne (`owner[key] = chain`) et coupait la suite (1, 2, 3 rescorage, 4 : rien signalé). `owner.setdefault`.
+- Nit · low · revue · reporté · `f = open(j)` ou `with open(j) as f:` puis `open(f.name, "w")` ailleurs : le nom du fichier lu reste joignable par `.name` ; refuser `with open(j) as f` rendrait au faux positif le cas courant de CAP-9.
+- Pre-existing · low · revue · reporté · déclencheur textuel : `sqlite3.connect(j)` ou `zipfile`/`shelve` sans verbe d'écriture reconnu ne déclenchent pas la recherche du nom protégé, avant comme après la story.
+- Complexité : 0 constat · `scan_probe_suites` reste en O(textes × `MAX_ADDED` × longueur) ; `_parse_trees` parse le texte une fois, ligne par ligne seulement s'il est mal formé.
+- Vérifié sans constat : `_resolve_aliases` (alias `from … import … as` des seuls tireurs), tirages uniformes, `_texts_of` sur manifeste bizarre (dict, liste, `texts` non liste : `None`), listes vides.

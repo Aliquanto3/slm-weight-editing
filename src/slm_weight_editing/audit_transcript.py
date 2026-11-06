@@ -343,13 +343,104 @@ def _open_writes(text: str) -> bool:
         mode = keyword[0] if keyword else (positional[index] if len(positional) > index else "")
         if mode and not _READ_MODE.match(mode):
             return True
-    return False
+    # `[^)]*` s'arrête à la première parenthèse : `open(Path(j).resolve(), "a")` passe à travers.
+    return any(
+        isinstance(node, ast.Call) and _open_mode_reads(node) is False
+        for tree in _parse_trees(text)
+        for node in ast.walk(tree)
+    )
+
+
+def _parse_one(source: str) -> ast.AST | None:
+    for candidate in (source, source + "\n    pass"):
+        try:
+            return ast.parse(candidate)
+        except SyntaxError, ValueError, RecursionError, MemoryError:
+            continue
+    return None
+
+
+def _parse_trees(text: str) -> list[ast.AST]:
+    """Arbre du texte entier, sinon de chaque ligne analysable (fragment d'Edit, code cassé)."""
+    whole = _parse_one(text) if "\n" in text.strip() else None
+    if whole is not None:
+        return [whole]
+    return [t for line in text.split("\n") if (t := _parse_one(line.strip())) is not None]
 
 
 _READ_CALLS = {"open", "read_text", "read_bytes"}
 # Valeur d'une affectation qui ne lie pas un chemin : le résultat d'une lecture.
 _READ_RESULTS = _READ_CALLS | {"read", "readline", "readlines", "load", "loads", "splitlines"}
 _COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+# Seuls appels admis sur une ligne de lecture : tout autre appel (`os.link`, `sqlite3.connect`,
+# `map(f, ...)`) peut écrire ou lier le chemin lu, la ligne reste alors comptée.
+_HARMLESS_CALLS = _READ_RESULTS | {
+    "Path",
+    "PurePath",
+    "print",
+    "len",
+    "list",
+    "sorted",
+    "str",
+    "int",
+    "float",
+    "bool",
+    "dict",
+    "set",
+    "tuple",
+    "enumerate",
+    "zip",
+    "range",
+    "min",
+    "max",
+    "sum",
+    "any",
+    "all",
+    "decode",
+    "encode",
+    "strip",
+    "rstrip",
+    "lstrip",
+    "split",
+    "rsplit",
+    "lower",
+    "upper",
+    "startswith",
+    "endswith",
+    "get",
+    "items",
+    "keys",
+    "values",
+    "count",
+    "index",
+    "find",
+    "format",
+    "join",
+    "exists",
+    "is_file",
+    "is_dir",
+    "resolve",
+    "append",
+    "extend",
+    "isinstance",
+    "repr",
+    "abs",
+    "round",
+    "reversed",
+}
+_OPEN_KEYWORDS = {"mode", "buffering", "encoding", "errors", "newline"}
+_BINDERS = (
+    ast.FunctionDef,
+    ast.AsyncFunctionDef,
+    ast.ClassDef,
+    ast.Lambda,
+    ast.Import,
+    ast.ImportFrom,
+    ast.Global,
+    ast.Nonlocal,
+    ast.Delete,
+    ast.NamedExpr,
+)
 
 
 def _open_mode_reads(call: ast.Call) -> bool | None:
@@ -359,16 +450,25 @@ def _open_mode_reads(call: ast.Call) -> bool | None:
         index = 1
     elif isinstance(func, ast.Attribute) and func.attr == "open":
         module = func.value.id if isinstance(func.value, ast.Name) else ""
-        if module == "os":
-            return False  # drapeaux : repli prudent
+        if module == "os":  # drapeaux : seul `os.O_RDONLY` seul est une lecture
+            flags = call.args[1] if len(call.args) > 1 else None
+            return (
+                isinstance(flags, ast.Attribute)
+                and flags.attr == "O_RDONLY"
+                and isinstance(flags.value, ast.Name)
+                and flags.value.id == "os"
+                and not call.keywords
+            )
         index = 1 if module in {"io", "codecs", "gzip", "bz2", "lzma"} else 0
     else:
         return None
     mode = next((k.value for k in call.keywords if k.arg == "mode"), None)
     if mode is None and len(call.args) > index:
         mode = call.args[index]
-    if any(k.arg is None for k in call.keywords) or any(
-        isinstance(a, ast.Starred) for a in call.args
+    if (
+        any(k.arg not in _OPEN_KEYWORDS for k in call.keywords)  # `opener=`, `**kw`
+        or any(isinstance(a, ast.Starred) for a in call.args)
+        or len(call.args) > index + 2  # `opener` en position 8 : repli prudent
     ):
         return False
     if mode is None:
@@ -380,42 +480,58 @@ def _open_mode_reads(call: ast.Call) -> bool | None:
     )
 
 
+def _call_name(call: ast.Call) -> str:
+    func = call.func
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return func.id if isinstance(func, ast.Name) else ""
+
+
+def _plain_names(target: ast.expr) -> bool:
+    if isinstance(target, ast.Tuple | ast.List):
+        return all(_plain_names(t) for t in target.elts)
+    return isinstance(target, ast.Name)
+
+
 def _line_only_reads(line: str) -> bool:
     """Vrai si la ligne est prouvée en lecture seule (AST) et ne lie aucun chemin à un nom.
 
     Une seule instruction ; chaque `open` en mode de lecture littéral ; ni `:=` ni affectation
     d'autre chose que le résultat d'une lecture (`p = Path(j); p.read_text()` reste compté).
     """
-    source = line.strip()
-    tree = None
-    for candidate in (source, source + "\n    pass"):
-        try:
-            tree = ast.parse(candidate)
-            break
-        except SyntaxError, ValueError, RecursionError:
-            continue
+    tree = _parse_one(line.strip())
     if tree is None or len(tree.body) != 1:
         return False
     reads = False
     for node in ast.walk(tree):
-        if isinstance(node, ast.NamedExpr):
+        if isinstance(node, _BINDERS):
             return False
         if isinstance(node, ast.Call):
             mode_reads = _open_mode_reads(node)
             if mode_reads is False:
                 return False
-            name = node.func.attr if isinstance(node.func, ast.Attribute) else ""
-            reads = reads or bool(mode_reads) or name in _READ_CALLS
-    stmt = tree.body[0]
-    if isinstance(stmt, ast.Assign | ast.AugAssign | ast.AnnAssign):
-        value = stmt.value
-        if isinstance(value, ast.Call):
-            func = value.func
-            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
-            if name not in _READ_RESULTS:
+            name = _call_name(node)
+            if name not in _HARMLESS_CALLS:
                 return False
-        elif not isinstance(value, _COMPREHENSIONS):
-            return False
+            reads = reads or bool(mode_reads) or name in _READ_CALLS
+        elif isinstance(node, ast.For | ast.AsyncFor | ast.comprehension):
+            # `for p in ["state.json"]` lie le chemin ; `for row in open(j)` lie une ligne lue.
+            it = node.iter
+            if not (
+                isinstance(it, ast.Name)
+                or (isinstance(it, ast.Call) and _call_name(it) in _READ_RESULTS)
+            ):
+                return False
+        elif isinstance(node, ast.Assign | ast.AugAssign | ast.AnnAssign):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if not all(_plain_names(t) for t in targets):
+                return False  # `d["state.json"] = ...`, `x.p = ...`
+            value = node.value
+            if isinstance(value, ast.Call):
+                if _call_name(value) not in _READ_RESULTS:
+                    return False
+            elif not isinstance(value, _COMPREHENSIONS):
+                return False
     return reads
 
 

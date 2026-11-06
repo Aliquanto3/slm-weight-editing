@@ -382,3 +382,32 @@ def test_unrelated_call_inside_a_suite_does_not_break_it():
 def test_repeated_prefix_scoring_is_not_a_suite():
     batch = [[1], [1, 2], [1, 2, 3]]
     assert decode.scan_probe_suites([(n, batch) for n in range(1, 6)]) == []
+
+
+# Revue passe 2 : écritures cachées derrière une ligne de lecture, rescorage intercalé.
+
+EVIL_OPENER = "def ev(p, f):\n    return os.open(p, os.O_WRONLY | os.O_TRUNC)\n"
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        'open(Path("sessions/s1/journal.jsonl").resolve(), "a")\n',
+        'open(str("sessions/s1/state.json"), "w")\n',
+        EVIL_OPENER + 'open("sessions/s1/state.json", opener=ev).read()\n',
+        EVIL_OPENER
+        + 'open("sessions/s1/state.json", "r", -1, None, None, None, True, ev).read()\n',
+        'os.link("sessions/s1/state.json", open("work/n").read())\nopen("work/a", "w")\n',
+        'for p in ["sessions/s1/state.json"]: open("work/x").read()\nopen(p, "w")\n',
+        'with open("sessions/s1/state.json") as f: name = f.name\nopen(name, "w")\n',
+        'x = [p for p in ["sessions/s1/state.json"] if open("a").read()]\nopen(x[0], "w")\n',
+    ],
+)
+def test_write_hidden_behind_a_read_line_stays_flagged(code):
+    assert "etat-seance" in {r for r, _ in audit.check_code_content(code, "Write")}
+
+
+def test_rescoring_a_text_does_not_steal_it_from_its_suite():
+    a = [1, 2, 3]
+    probes = [(1, [a]), (2, [a + [4]]), (3, [a + [4]]), (4, [a + [4, 5]])]
+    assert decode.scan_probe_suites(probes) == [([1, 2, 4], 3)]

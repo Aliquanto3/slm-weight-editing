@@ -247,7 +247,7 @@ def scan_probe_suites(probes: list[tuple[int, list[list[int]]]]) -> list[tuple[l
             chain = len(chains) - 1
         chains[chain].append(number)
         for key in keys:
-            owner[key] = chain
+            owner.setdefault(key, chain)  # un rescorage ne vole pas le texte à sa suite
     return [(numbers, len(numbers)) for numbers in chains if len(numbers) >= MIN_CALLS]
 
 
