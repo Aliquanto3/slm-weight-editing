@@ -73,7 +73,7 @@ def freeze_it(s, **kw):
 
 def test_freeze_writes_exact_diff_and_freezes(sess):
     diff = freeze_it(sess)
-    assert diff["format"] == "slm-weight-editing/edit-diff-v1"
+    assert diff["format"] == "slm-weight-editing/edit-diff-v2"
     assert (diff["session_id"], diff["base_revision"], diff["budget"], diff["batches_used"]) == (
         "s1",
         REV,
@@ -502,11 +502,11 @@ def test_whole_freeze_runs_under_the_session_lock(sess, monkeypatch):
     real = freeze.compute_tensor_diff
     seen = []
 
-    def spy(base, work):
+    def spy(base, work, *args):
         seen.append((sess["dir"] / harness.LOCK_FILE).exists())
         with pytest.raises(HarnessError, match="un lot tourne déjà"):
             harness.update_state(sess["dir"], frozen=True)  # second gel concurrent
-        return real(base, work)
+        return real(base, work, *args)
 
     monkeypatch.setattr(freeze, "compute_tensor_diff", spy)
     freeze_it(sess)

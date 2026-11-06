@@ -1,5 +1,5 @@
 ---
-status: decided
+status: review
 story: "2.8"
 title: lm_head détaché, n'éditer que la sortie (CAP-10)
 ---
@@ -78,3 +78,19 @@ Anaël a levé ses points d'arrêt de relecture le 2026-11-06 (« Retire mes poi
 3. Permis à tout moment. On copie l'embed courant de `work/` (éventuellement déjà édité). Le diff rejoue les transformations dans l'ordre, donc le résultat reste vérifiable.
 4. Champ `lm_head_detached` dans le rapport et mention « écart de protocole » dans la comparaison au MIT.
 5. Story codée sans attendre l'essai 2.7. CAP-10 sort de s2 si l'essai 2.7 échoue, ou si le GGUF détaché dépasse le témoin de plus de 25 % en taille ou de 20 % en temps de réponse médian au banc.
+
+## Réalisation (2026-11-06)
+
+Codée sans attendre l'essai Ollama de 2.7 (décision 5) : la commande ne sert en s2 que si l'essai conclut « CAP-10 maintenu » et si le GGUF détaché reste sous 25 % de taille et 20 % de temps de réponse médian de plus que le témoin.
+
+- Nouvelle commande `detach-lm-head` (module `lm_head.py`, parser et aiguillage dans `harness.py`) : verrou de séance, refus après le gel, une fois, ligne `detach_lm_head` au journal (source, sha256 de l'embed et de `lm_head`, sha256 du fichier réécrit, sha256 avant et après de `config.json`, clés écrites). Écriture : `model.safetensors` réécrit avec le tenseur en plus (option (a), remplacement atomique) ; refus d'un checkpoint à `model.safetensors.index.json`.
+- `freeze.py` : `FORMAT` `edit-diff-v2` (v1 toujours lu), champ `detached_lm_head`, entrée `added` pour `lm_head.weight` (toujours émise, même sans édition : le détachement doit se rejouer), `config.json` délié reconnu seulement si la transformation recalculée redonne le sha256 journalisé, rejeu par `apply-diff`.
+- `report_gguf.py` : `lm_head.weight` vers `output.weight`, `output.weight` ajouté par `add_output_weight` puis patch par ligne, témoin de fidélité `output.weight` (embed de la base requantifié contre `token_embd`), champs `lm_head_detached` et `protocol_gap` dans `diff.json`. `compare_edits.py` : « tenseur ajouté » et « écart de protocole ». Consigne de séance : commande recopiable, sans chevron ni crochet.
+
+### Écarts à la spec
+
+- Le tenseur ajouté figure toujours au diff, même inchangé (entrée `changed: 0`) ; la spec ne le disait pas, mais sans lui apply-diff ne peut pas rejouer le détachement.
+- Un détachement journalisé avec `lm_head.weight` entièrement égal à `embed_tokens` reste un « tenseur modifié » dans le décompte du gel (`tensors_changed`).
+- `test_report_embed_refuses_a_distinct_lm_head` et les deux autres tests du cas lié sont inchangés et verts (sans diff détaché, `lm_head` reste refusé) ; seul `gguf_name("lm_head.weight")` change de valeur.
+- Le nom du tenseur dans le GGUF est celui de la copie de `token_embd` ; le report ne vérifie pas un `lm_head` hors racine (`model.lm_head.weight` refusé).
+- Non fait : le rapport réel sur le blob officiel et l'essai Ollama (à Anaël) ; mesure de taille et de temps de réponse de la décision 5.

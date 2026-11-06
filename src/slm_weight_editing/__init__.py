@@ -90,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     from slm_weight_editing.safetensors_file import SafetensorsError
 
-    expected, provenance = None, None
+    expected, provenance, detached = None, None, False
     if args.edit_diff:
         from slm_weight_editing.freeze import DiffError, load_diff, relevant_files
         from slm_weight_editing.report_gguf import sha256_file
@@ -101,6 +101,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             meta, _ = load_diff(args.edit_diff)
             expected = {t["name"]: t["sha256_after"] for t in meta["tensors"]}
+            detached = meta.get("detached_lm_head") is not None
         except (DiffError, KeyError, TypeError) as exc:
             print(f"Erreur : diff invalide ({exc})", file=sys.stderr)
             return 1
@@ -138,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
             base_checkpoint=args.base_checkpoint,
             expected_sha256=expected,
             provenance=provenance,
+            lm_head_detached=detached,
             intermediate=args.intermediate,
             command="uv run slm-weight-editing " + shlex.join(argv),
         )

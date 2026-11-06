@@ -35,10 +35,19 @@ import numpy as np
 
 from slm_weight_editing import harness
 from slm_weight_editing.harness import MAX_CHANGED_SHARE, HarnessError
+from slm_weight_editing.lm_head import (
+    LM_HEAD,
+    append_tensor,
+    detach_event,
+    transform_config,
+    write_config,
+)
 from slm_weight_editing.report_gguf import public_text
 from slm_weight_editing.safetensors_file import SafeTensor, SafetensorsError, open_checkpoint
 
-FORMAT = "slm-weight-editing/edit-diff-v1"
+FORMAT = "slm-weight-editing/edit-diff-v2"
+# v1 (sans `detached_lm_head`) reste lisible par apply-diff, compare-edits et report-gguf.
+FORMATS = ("slm-weight-editing/edit-diff-v1", FORMAT)
 DIFF_FILE = "diff.json"
 VALUES_FILE = "diff.bin"
 FREEZE_DIR = "freeze"
@@ -83,11 +92,55 @@ def _write_atomic(path: Path, data: bytes) -> None:
 # --- Diff -------------------------------------------------------------------------------------
 
 
+def _diff_pair(
+    name: str, b: SafeTensor, w: SafeTensor, *, extra: dict | None = None, keep_equal: bool = False
+) -> tuple[dict, np.ndarray, np.ndarray] | None:
+    """Entrée de diff de `w` contre `b` (None si identiques, sauf `keep_equal`)."""
+    if b.shape != w.shape or b.dtype != w.dtype:
+        raise FreezeError(
+            f"{name} : forme {list(w.shape)} {w.dtype} dans work/, "
+            f"{list(b.shape)} {b.dtype} dans l'original"
+        )
+    raw_b, raw_w = b.read_bytes(), w.read_bytes()
+    if raw_b == raw_w and not keep_equal:
+        return None
+    u = _uint(b.dtype, name)
+    arr_b, arr_w = np.frombuffer(raw_b, u), np.frombuffer(raw_w, u)
+    idx = np.flatnonzero(arr_b != arr_w)
+    numel = arr_b.size
+    if len(idx) > MAX_CHANGED_SHARE * numel:
+        raise FreezeError(
+            f"{name} : {len(idx)}/{numel} éléments changés "
+            f"({len(idx) / numel:.1%}), plafond {MAX_CHANGED_SHARE:.0%} : le diff "
+            "reviendrait à publier le tenseur complet"
+        )
+    entry = {
+        "name": name,
+        "shape": list(b.shape),
+        "dtype": b.dtype,
+        "numel": numel,
+        "changed": int(len(idx)),
+        "sha256_before": _sha(raw_b),
+        "sha256_after": _sha(raw_w),
+    } | (extra or {})
+    return entry, idx, arr_w[idx]
+
+
 def compute_tensor_diff(
-    base: dict[str, SafeTensor], work: dict[str, SafeTensor]
+    base: dict[str, SafeTensor], work: dict[str, SafeTensor], detached: dict | None = None
 ) -> list[tuple[dict, np.ndarray, np.ndarray]]:
-    """Tenseurs qui diffèrent : (entrée sans offsets, indices plats, valeurs après en uint)."""
-    missing, extra = sorted(set(base) - set(work)), sorted(set(work) - set(base))
+    """Tenseurs qui diffèrent : (entrée sans offsets, indices plats, valeurs après en uint).
+
+    `detached` (ligne `detach_lm_head` du journal) autorise le seul `lm_head.weight` en plus ;
+    il est comparé à l'`embed_tokens` de la base et figure toujours au diff (entrée `added`),
+    même sans édition : le détachement lui-même doit se rejouer.
+    """
+    source = detached["source"] if detached else None
+    allowed = {LM_HEAD} if detached else set()
+    missing = sorted(set(base) - set(work))
+    extra = sorted(set(work) - set(base) - allowed)
+    if detached and (LM_HEAD not in work or source not in base):
+        missing.append(LM_HEAD if LM_HEAD not in work else str(source))
     if missing or extra:
         raise FreezeError(
             f"work/ et l'original n'ont pas les mêmes tenseurs "
@@ -95,35 +148,12 @@ def compute_tensor_diff(
         )
     out = []
     for name in sorted(base):
-        b, w = base[name], work[name]
-        if b.shape != w.shape or b.dtype != w.dtype:
-            raise FreezeError(
-                f"{name} : forme {list(w.shape)} {w.dtype} dans work/, "
-                f"{list(b.shape)} {b.dtype} dans l'original"
-            )
-        raw_b, raw_w = b.read_bytes(), w.read_bytes()
-        if raw_b == raw_w:
-            continue
-        u = _uint(b.dtype, name)
-        arr_b, arr_w = np.frombuffer(raw_b, u), np.frombuffer(raw_w, u)
-        idx = np.flatnonzero(arr_b != arr_w)
-        numel = arr_b.size
-        if len(idx) > MAX_CHANGED_SHARE * numel:
-            raise FreezeError(
-                f"{name} : {len(idx)}/{numel} éléments changés "
-                f"({len(idx) / numel:.1%}), plafond {MAX_CHANGED_SHARE:.0%} : le diff "
-                "reviendrait à publier le tenseur complet"
-            )
-        entry = {
-            "name": name,
-            "shape": list(b.shape),
-            "dtype": b.dtype,
-            "numel": numel,
-            "changed": int(len(idx)),
-            "sha256_before": _sha(raw_b),
-            "sha256_after": _sha(raw_w),
-        }
-        out.append((entry, idx, arr_w[idx]))
+        pair = _diff_pair(name, base[name], work[name])
+        if pair is not None:
+            out.append(pair)
+    if detached:
+        added = {"added": True, "source": source}
+        out.append(_diff_pair(LM_HEAD, base[source], work[LM_HEAD], extra=added, keep_equal=True))
     return out
 
 
@@ -146,16 +176,57 @@ def relevant_files(files: list[dict]) -> list[dict]:
     return [f for f in files if not is_ignored_file(f.get("path"))]
 
 
-def changed_files(base_files: dict[str, str], work_files: dict[str, str]) -> list[dict]:
+def changed_files(
+    base_files: dict[str, str], work_files: dict[str, str], known: dict | None = None
+) -> list[dict]:
     """Fichiers non safetensors qui diffèrent de la base (modifiés, ajoutés ou supprimés).
 
     Les chemins sous `.cache/` sont ignorés (métadonnées de téléchargement HF absentes de work/).
+    `known` (champ `config` d'un détachement vérifié : path, sha256_before, sha256_after) retire
+    le seul `config.json` dont l'écart est cette transformation, rejouée par apply-diff.
     """
+
+    def is_known(path: str) -> bool:
+        return (
+            known is not None
+            and path == known["path"]
+            and base_files.get(path) == known["sha256_before"]
+            and work_files.get(path) == known["sha256_after"]
+        )
+
     return [
         {"path": p, "sha256_before": base_files.get(p), "sha256_after": work_files.get(p)}
         for p in sorted(set(base_files) | set(work_files))
-        if base_files.get(p) != work_files.get(p) and not is_ignored_file(p)
+        if base_files.get(p) != work_files.get(p) and not is_ignored_file(p) and not is_known(p)
     ]
+
+
+def _known_config(original: Path, detached: dict | None) -> dict | None:
+    """Config du détachement, si la transformation redonne bien le sha256 journalisé."""
+    if detached is None:
+        return None
+    cfg = detached["config"]
+    path = original / cfg["path"]
+    try:
+        before = path.read_bytes()
+        after, _ = transform_config(before.decode("utf-8"))
+    except OSError, ValueError, HarnessError:
+        return None
+    if _sha(before) != cfg["sha256_before"] or _sha(after.encode("utf-8")) != cfg["sha256_after"]:
+        return None
+    return cfg
+
+
+def _detached_field(detached: dict | None) -> dict | None:
+    """Champ `detached_lm_head` de diff.json (source, nom et transformation de la config)."""
+    if detached is None:
+        return None
+    keys = ("path", "sha256_before", "sha256_after", "keys")
+    return {
+        "source": detached["source"],
+        "lm_head": detached["lm_head"],
+        "config": {k: detached["config"][k] for k in keys},
+    }
 
 
 def _pack_values(parts: list[tuple[dict, np.ndarray, np.ndarray]]) -> tuple[list[dict], bytes]:
@@ -262,9 +333,12 @@ def _freeze_locked(directory: Path, session_id: str, original: Path, out) -> dic
 
     # 2. Diff calculé avant le gel : un plafond dépassé ne fige rien.
     work = directory / harness.WORK_DIR
-    parts = compute_tensor_diff(open_checkpoint(original), open_checkpoint(work))
+    detached = detach_event(journal)
+    parts = compute_tensor_diff(open_checkpoint(original), open_checkpoint(work), detached)
     work_files = harness.work_file_hashes(work)
-    files = changed_files(opened["base_files_sha256"], work_files)
+    files = changed_files(
+        opened["base_files_sha256"], work_files, _known_config(original, detached)
+    )
 
     # 3. Gel (verrou déjà tenu : aucun lot ne peut démarrer), puis work/ doit être resté
     # identique à ce qui a été comparé (l'éditeur écrit work/ sans passer par le verrou).
@@ -289,6 +363,7 @@ def _freeze_locked(directory: Path, session_id: str, original: Path, out) -> dic
             "journal": {"file": harness.JOURNAL_FILE, "sha256": journal_sha},
             "max_changed_share": MAX_CHANGED_SHARE,
             "values_file": {"name": VALUES_FILE, "sha256": _sha(values), "bytes": len(values)},
+            "detached_lm_head": _detached_field(detached),
             "tensors": entries,
             "files_changed": files,
             "frozen_at": state.updated_at,
@@ -333,7 +408,7 @@ def load_diff(path: str | Path) -> tuple[dict, bytes]:
     except (OSError, ValueError) as exc:
         raise DiffError(f"diff illisible : {path} ({exc})") from exc
     found = meta.get("format") if isinstance(meta, dict) else None
-    if found != FORMAT:
+    if found not in FORMATS:
         raise DiffError(f"{path} : format {found!r}, {FORMAT} attendu")
     try:
         vf = meta["values_file"]
@@ -352,9 +427,37 @@ def load_diff(path: str | Path) -> tuple[dict, bytes]:
         or not all(isinstance(f, dict) and isinstance(f.get("path"), str) for f in files)
     ):
         raise DiffError(f"{path} : diff invalide (tensors ou files_changed mal formés)")
+    detached = _check_detached(meta.get("detached_lm_head"), path)
+    meta["detached_lm_head"] = detached
     for entry in meta["tensors"]:
         _check_entry(entry, len(values))
+        if entry.get("added") is not None and (
+            entry["added"] is not True
+            or detached is None
+            or entry["name"] != LM_HEAD
+            or entry.get("source") != detached["source"]
+        ):
+            raise DiffError(f"{entry['name']} : tenseur ajouté sans détachement correspondant")
+    if detached is not None and not any(e.get("added") for e in meta["tensors"]):
+        raise DiffError(f"{path} : détachement de lm_head sans tenseur {LM_HEAD}")
     return meta, values
+
+
+def _check_detached(value: object, path: Path) -> dict | None:
+    """Champ `detached_lm_head` (v2) : None s'il est absent (v1) ou nul."""
+    if value is None:
+        return None
+    cfg = value.get("config") if isinstance(value, dict) else None
+    ok = (
+        isinstance(cfg, dict)
+        and isinstance(value.get("source"), str)
+        and value.get("lm_head") == LM_HEAD
+        and all(isinstance(cfg.get(k), str) for k in ("path", "sha256_before", "sha256_after"))
+        and isinstance(cfg.get("keys"), list)
+    )
+    if not ok or Path(cfg["path"]).name != cfg["path"]:
+        raise DiffError(f"{path} : detached_lm_head mal formé")
+    return value
 
 
 def _is_int(value: object) -> bool:
@@ -403,9 +506,11 @@ def replay_tensors(meta: dict, values: bytes, base: dict[str, SafeTensor]):
     """Génère (entrée, octets avant, octets après) en vérifiant les sha256 avant et après."""
     for entry in meta["tensors"]:
         name = entry["name"]
-        st = base.get(name)
+        # Tenseur ajouté (lm_head détaché) : comparé à l'embed_tokens de la base.
+        source = entry["source"] if entry.get("added") else name
+        st = base.get(source)
         if st is None:
-            raise DiffError(f"{name} absent de l'original")
+            raise DiffError(f"{source} absent de l'original")
         if list(st.shape) != entry["shape"] or st.dtype != entry["dtype"]:
             raise DiffError(f"{name} : forme ou dtype différents de l'original")
         before = st.read_bytes()
@@ -443,7 +548,10 @@ def apply_diff(diff_path: str | Path, original: str | Path, out: str | Path) -> 
     if out.exists() and any(out.iterdir()):
         raise DiffError(f"sortie non vide : {out}")
     base = open_checkpoint(original)
-    patched = {e["name"]: after for e, _, after in replay_tensors(meta, values, base)}
+    patched, added = {}, {}
+    for e, _, after in replay_tensors(meta, values, base):
+        (added if e.get("added") else patched)[e["name"]] = after
+    detached = meta["detached_lm_head"]
     out.mkdir(parents=True, exist_ok=True)
     try:
         for src in sorted(p for p in original.rglob("*") if p.is_file()):
@@ -455,6 +563,8 @@ def apply_diff(diff_path: str | Path, original: str | Path, out: str | Path) -> 
             with (out / st.path.relative_to(original)).open("r+b") as f:
                 f.seek(st.start)
                 f.write(after)
+        if detached is not None:
+            _replay_detach(detached, added[LM_HEAD], base, original, out)
         result = open_checkpoint(out)
         for entry in meta["tensors"]:
             if _sha(result[entry["name"]].read_bytes()) != entry["sha256_after"]:
@@ -463,6 +573,27 @@ def apply_diff(diff_path: str | Path, original: str | Path, out: str | Path) -> 
         shutil.rmtree(out, ignore_errors=True)
         raise
     return meta
+
+
+def _replay_detach(
+    detached: dict, lm_head: bytes, base: dict[str, SafeTensor], original: Path, out: Path
+) -> None:
+    """Rejoue le détachement dans `out` : tenseur ajouté, puis `config.json` délié."""
+    embed = base[detached["source"]]
+    cfg = detached["config"]
+    config = out / cfg["path"]
+    try:
+        before = config.read_bytes()
+        new_text, _ = transform_config(before.decode("utf-8"))
+    except (OSError, ValueError, HarnessError) as exc:
+        raise DiffError(f"{cfg['path']} illisible dans l'original : {exc}") from exc
+    if _sha(before) != cfg["sha256_before"]:
+        raise DiffError(f"{cfg['path']} : l'original n'a pas le sha256 avant du détachement")
+    if _sha(new_text.encode("utf-8")) != cfg["sha256_after"]:
+        raise DiffError(f"{cfg['path']} : le rejeu ne redonne pas le sha256 après publié")
+    target = out / embed.path.relative_to(original)
+    append_tensor(target, LM_HEAD, embed.dtype, list(embed.shape), lm_head)
+    write_config(config, new_text)
 
 
 # --- CLI --------------------------------------------------------------------------------------
@@ -505,6 +636,8 @@ def run(args: argparse.Namespace) -> int:
                 f"Séance {args.session} gelée : {len(diff['tensors'])} tenseurs modifiés, "
                 f"{sum(t['changed'] for t in diff['tensors'])} éléments"
             )
+            if diff.get("detached_lm_head"):
+                print("lm_head détaché (écart de protocole, rejoué par apply-diff)")
             print(f"Diff : {Path(where) / DIFF_FILE}")
             for f in relevant_files(diff["files_changed"]):
                 print(f"Attention : {f['path']} diffère de la base (non rejoué par apply-diff)")

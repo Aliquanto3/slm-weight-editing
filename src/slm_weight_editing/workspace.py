@@ -34,7 +34,7 @@ from slm_weight_editing.script_runner import (
 SESSIONS_DIR = harness.WORKSPACE_SESSIONS_DIR
 NOTES_DIR = "notes"
 TEMPLATES = Path(__file__).with_name("seance")
-ALLOWED_SUBCOMMANDS = ("run-batch", "session-status", "run-script", "probe")
+ALLOWED_SUBCOMMANDS = ("run-batch", "session-status", "run-script", "probe", "detach-lm-head")
 # Commandes lues ou exécutées sans règle en mode dontAsk (lecture seule) ou génériques : refusées.
 DENIED_COMMANDS = (
     "cat head tail less more grep egrep fgrep rg find ls dir tree type file stat wc du df od xxd "

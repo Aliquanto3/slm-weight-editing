@@ -179,12 +179,31 @@ def _side_deltas(ref, edit, diff, label: str) -> dict[str, np.ndarray]:
         raise CompareError(f"{label} : {exc}") from exc
 
 
+def _added_tensors(diff) -> list[str]:
+    """Tenseurs ajoutés par un diff de séance (lm_head détaché), absents de l'original."""
+    if diff is None:
+        return []
+    from slm_weight_editing.freeze import DiffError, load_diff
+
+    try:
+        meta, _ = load_diff(diff)
+    except DiffError:
+        return []  # l'erreur est levée par `_side_deltas`, avec son libellé
+    return sorted(e["name"] for e in meta["tensors"] if e.get("added"))
+
+
 def compare_checkpoints(original, edit_a, edit_b, diff_a=None, diff_b=None) -> dict:
     ref = open_checkpoint(original)
     total = sum(math.prod(t.shape) for t in ref.values())
     da = _side_deltas(ref, edit_a, diff_a, "édition A")
     db = _side_deltas(ref, edit_b, diff_b, "édition B")
-    return compare_deltas(da, db, total)
+    result = compare_deltas(da, db, total)
+    for key, diff in (("a", diff_a), ("b", diff_b)):
+        added = _added_tensors(diff)
+        # Le delta d'un tenseur ajouté est mesuré contre l'embed_tokens de la base.
+        result[key]["added"] = added
+        result[key]["lm_head_detached"] = bool(added)
+    return result
 
 
 # --- Banc -------------------------------------------------------------------------------------
@@ -325,6 +344,20 @@ def render_markdown(result: dict, label_a: str, label_b: str) -> str:
             f"| {lab} | {len(s['tensors'])} | {s['modified_weights']} | {_pct(s['model_share'])} |"
         )
     lines += ["", f"Tenseurs touchés par les deux : {len(w['common'])}."]
+    for lab, side in ((label_a, w["a"]), (label_b, w["b"])):
+        for name in side.get("added", []):
+            lines.append(
+                f"- {lab} : tenseur ajouté : `{name}`, poids comptés par rapport à "
+                "l'`embed_tokens` de la base"
+            )
+    detached = [lab for lab, side in ((label_a, w["a"]), (label_b, w["b"])) if side.get("added")]
+    if detached:
+        lines += [
+            "",
+            f"Écart de protocole : {', '.join(detached)} a détaché `lm_head` des embeddings liés "
+            "(l'édition du MIT garde les embeddings liés) ; ces comparaisons ne sont pas à "
+            "protocole égal.",
+        ]
     if w["common"]:
         lines += [
             "",

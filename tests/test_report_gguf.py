@@ -399,7 +399,7 @@ def test_embed_tokens_maps_to_token_embd():
     assert gguf_name(EMBED) == "token_embd.weight"
     assert gguf_name("model.embed_tokens.weight") == "token_embd.weight"
     assert gguf_name("model.language_model.layers.3.self_attn.q_proj.weight") is None
-    assert gguf_name("lm_head.weight") is None
+    assert gguf_name("lm_head.weight") == "output.weight"
 
 
 def test_report_embed_row_changes_only_that_rows_blocks(tmp_path):

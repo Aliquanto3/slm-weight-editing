@@ -102,7 +102,7 @@ def test_settings_json(ws):
     commands = [
         f"{tool}(uv run slm-weight-editing {sub} *)"
         for tool in ("Bash", "PowerShell")
-        for sub in ("run-batch", "session-status", "run-script", "probe")
+        for sub in ("run-batch", "session-status", "run-script", "probe", "detach-lm-head")
     ]
     assert perms["allow"] == [
         *commands,
@@ -202,20 +202,26 @@ def test_cuda_workspace_settings_carry_extra(ws_cuda):
     allow = json.loads((ws_cuda / ".claude" / "settings.json").read_text("utf-8"))["permissions"][
         "allow"
     ]
-    assert allow[:8] == [
+    assert allow[:10] == [
         f"{tool}(uv run --extra cuda slm-weight-editing {sub} *)"
         for tool in ("Bash", "PowerShell")
-        for sub in ("run-batch", "session-status", "run-script", "probe")
+        for sub in ("run-batch", "session-status", "run-script", "probe", "detach-lm-head")
     ]
-    assert allow[8] == "Read(./**)"
-    assert not any("--extra" in rule for rule in allow[8:])
+    assert allow[10] == "Read(./**)"
+    assert not any("--extra" in rule for rule in allow[10:])
 
 
 def test_cuda_workspace_instructions_carry_extra(ws_cuda):
     repo = REPO.resolve().as_posix()
     consigne = (ws_cuda / "CONSIGNE.md").read_text(encoding="utf-8")
     base_cmd = "uv run --extra cuda slm-weight-editing"
-    for sub in ("run-batch", "session-status", "run-script scripts/NOM.py", "probe"):
+    for sub in (
+        "run-batch",
+        "session-status",
+        "run-script scripts/NOM.py",
+        "probe",
+        "detach-lm-head",
+    ):
         assert f"{base_cmd} {sub}" in consigne
     assert "<EXTRA>" not in consigne
     claude = (ws_cuda / "CLAUDE.md").read_text(encoding="utf-8")

@@ -60,7 +60,7 @@ RULES = {
     "base-differente": "séance ouverte sur une base qui diffère de la révision publiée",
 }
 
-ALLOWED_SUBCOMMANDS = ("run-batch", "session-status", "run-script", "probe")
+ALLOWED_SUBCOMMANDS = ("run-batch", "session-status", "run-script", "probe", "detach-lm-head")
 # Aucun module du harnais n'est importable par l'éditeur (run-script les refuse aussi).
 ALLOWED_INTERNAL_MODULES: tuple[str, ...] = ()
 # Outils de séance ; tout autre outil (WebFetch, WebSearch, Agent, Skill, mcp__*...) échoue.

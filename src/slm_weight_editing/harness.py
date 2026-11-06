@@ -897,7 +897,17 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
     )
     ul.add_argument("--session", required=True)
     ul.add_argument("--sessions-root", default=DEFAULT_SESSIONS_ROOT)
-    for p in (op, rb, st, ul):
+    dl = sub.add_parser(
+        "detach-lm-head",
+        help="sépare lm_head des embeddings liés dans work/ (une fois ; ni lot ni probe)",
+        description=(
+            "Copie embed_tokens en lm_head.weight dans work/ et passe tie_word_embeddings à "
+            "false ; journalise une ligne detach_lm_head. Refusé après le gel ou si déjà fait."
+        ),
+    )
+    dl.add_argument("--session", required=True)
+    dl.add_argument("--sessions-root", help=root_help)
+    for p in (op, rb, st, ul, dl):
         p.set_defaults(func=run)
 
 
@@ -931,6 +941,10 @@ def run(args: argparse.Namespace) -> int:
                 f"Lot {entry['batch']}/{entry['budget']} : {len(entry['problems'])} problèmes, "
                 f"reste {entry['remaining']} lots (appareil {entry['device']['device']})"
             )
+        elif args.command == "detach-lm-head":
+            from slm_weight_editing.lm_head import run_detach
+
+            return run_detach(args)
         elif args.command == "session-unlock":
             entry = unlock_session(args.session, args.sessions_root)
             if entry is None:
