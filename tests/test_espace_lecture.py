@@ -338,25 +338,47 @@ def test_hook_process_denies_with_reason(ws, name, tool_input):
     assert " ; permis : " in out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-@pytest.mark.parametrize(
-    "data",
-    [
-        b"",
-        b"{pas du json",
-        b"[1, 2]",
-        "\u00e9".encode("latin-1"),
-        json.dumps({"tool_name": "Read", "tool_input": {"file_path": "CONSIGNE.md"}}).encode(),
-    ],
-)
-def test_hook_process_permitted_or_malformed_is_silent(ws, data):
+def test_hook_process_permitted_is_silent(ws):
+    data = json.dumps({"tool_name": "Read", "tool_input": {"file_path": "CONSIGNE.md"}}).encode()
     done = call_hook(ws, data)
     assert (done.returncode, done.stdout) == (0, b""), done.stderr
 
 
-def test_hook_process_without_workspace_file_is_silent(ws):
+def failure_reason(done: subprocess.CompletedProcess) -> str:
+    """Motif d'un refus `crochet-en-echec` (story 2.9) ; échoue sur toute autre sortie."""
+    assert done.returncode == 0, done.stderr
+    out = json.loads(done.stdout)["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny"
+    text = out["permissionDecisionReason"]
+    assert text.startswith("crochet-en-echec : "), text
+    assert text.endswith(hook.BLOCAGES_HINT)
+    return text
+
+
+# Story 2.9, critère 4 : entrée illisible ou exception, refus `crochet-en-echec` (échec fermé).
+@pytest.mark.parametrize(
+    ("data", "detail"),
+    [
+        (b"", "entrée illisible (JSONDecodeError)"),
+        (b"{pas du json", "entrée illisible (JSONDecodeError)"),
+        (b"[1, 2]", "entrée illisible (objet JSON attendu, reçu list)"),
+        ("é".encode("latin-1"), "entrée illisible (UnicodeDecodeError)"),
+    ],
+)
+def test_hook_process_malformed_input_is_denied(ws, data, detail):
+    assert f"crochet-en-echec : {detail} ; permis : " in failure_reason(call_hook(ws, data))
+
+
+def test_hook_process_without_workspace_file_is_denied(ws):
     (ws / "workspace.json").unlink()
-    done = call_hook(ws, json.dumps(payload("Bash", {"command": "cat x"}, ws)).encode())
-    assert (done.returncode, done.stdout) == (0, b"")
+    done = call_hook(ws, json.dumps(payload("Read", {"file_path": "CONSIGNE.md"}, ws)).encode())
+    assert "exception FileNotFoundError" in failure_reason(done)
+
+
+def test_hook_process_with_unreadable_workspace_file_is_denied(ws):
+    (ws / "workspace.json").write_text("{illisible", encoding="utf-8")
+    done = call_hook(ws, json.dumps(payload("Read", {"file_path": "CONSIGNE.md"}, ws)).encode())
+    assert "exception JSONDecodeError" in failure_reason(done)
 
 
 def test_settings_hook_block(ws):
@@ -376,6 +398,7 @@ def test_settings_hook_block(ws):
                             workspace.posix(ws),
                         ],
                         "timeout": 10,
+                        "onFailure": "block",
                     }
                 ],
             }
@@ -611,7 +634,6 @@ def test_relative_path_resolved_on_received_cwd():
         'open("workspace.json").read()',
         'open("sessions/s1/state.json", "rb").read()',
         'open("sessions/s1/state.json", mode="r").read()',
-        'import pathlib\npathlib.Path("sessions/s1/session.lock").open().read()',
         'import os\nos.open("sessions/s1/state.json", os.O_RDONLY)',
     ],
 )
@@ -633,6 +655,9 @@ def test_reading_protected_names_is_not_flagged(code):
         'import pathlib\npathlib.Path("workspace.json").write_text("{}")',
         'import json\njson.dump({}, f)\np = "sessions/s1/state.json"',
         'import os\nos.open("sessions/s1/state.json", os.O_WRONLY)',
+        # Story 2.9 : lecture que l'AST ne prouve pas (`pathlib.Path` n'est pas `Path`) ; sans
+        # verbe d'écriture, la mention de l'état de séance compte quand même.
+        'import pathlib\npathlib.Path("sessions/s1/session.lock").open().read()',
     ],
 )
 def test_writing_protected_names_stays_flagged(code):

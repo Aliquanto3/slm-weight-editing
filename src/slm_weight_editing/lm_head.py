@@ -164,6 +164,29 @@ def _recover(directory: Path, work: Path, detached: bool) -> None:
         tmp.unlink(missing_ok=True)
 
 
+def recover_interrupted(directory: Path) -> str | None:
+    """Reprise d'un détachement tué, par toute commande qui agit sur la séance (story 2.9).
+
+    Appelée sous le verrou, avant toute autre action. Sans `detach-bak/`, rien à faire (None).
+    Sans ligne `detach_lm_head` au journal, work/ est remis en l'état d'avant la tentative ; avec,
+    la sauvegarde est supprimée et work/ reste délié. Renvoie le message à afficher.
+    """
+    if not (directory / BACKUP_DIR).is_dir():
+        return None
+    detached = detach_event(harness.read_journal(directory)) is not None
+    _recover(directory, directory / harness.WORK_DIR, detached)
+    if detached:
+        return (
+            f"sauvegarde {BACKUP_DIR}/ d'un détachement de lm_head journalisé supprimée ; "
+            "work/ reste délié"
+        )
+    return (
+        f"détachement de lm_head interrompu ({BACKUP_DIR}/ sans ligne {EVENT} au journal) : "
+        "work/ remis en l'état d'avant la tentative ; une écriture faite dans work/ depuis "
+        "cette tentative est perdue"
+    )
+
+
 def detach_lm_head(
     session_id: str, *, sessions_root: str | Path = harness.DEFAULT_SESSIONS_ROOT
 ) -> dict:
@@ -242,7 +265,15 @@ def detach_lm_head(
             }
             harness._append_journal(directory, entry)
         except BaseException:
-            _recover(directory, work, detached=False)
+            # Ligne écrite en entier avant l'erreur (story 2.9) : work/ est conforme au journal,
+            # seule la sauvegarde part. Journal illisible : rien n'est touché, la sauvegarde
+            # reste et la commande suivante reprend (`recover_interrupted`).
+            try:
+                journaled = detach_event(harness.read_journal(directory)) is not None
+            except Exception:  # noqa: BLE001 - l'erreur d'origine remonte seule
+                journaled = None
+            if journaled is not None:
+                _recover(directory, work, detached=journaled)
             raise
         shutil.rmtree(backups)
         return entry

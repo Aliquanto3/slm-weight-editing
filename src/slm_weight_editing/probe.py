@@ -345,6 +345,7 @@ def run_probe(
     directory = harness.session_dir(session_id, sessions_root)
     harness.read_state(directory)
     with harness._session_lock(directory):
+        harness.recover_detach(directory)
         state = harness.read_state(directory)
         if state.frozen:
             raise HarnessError("séance gelée : plus aucune probe")

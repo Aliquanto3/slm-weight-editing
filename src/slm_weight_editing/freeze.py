@@ -338,6 +338,7 @@ def freeze_session(
 
 
 def _freeze_locked(directory: Path, session_id: str, original: Path, out) -> dict:
+    harness.recover_detach(directory)
     journal = harness.read_journal(directory)
     if any(e.get("event") == "freeze" for e in journal):
         raise FreezeError(f"séance {session_id} déjà gelée : diff déjà produit")
