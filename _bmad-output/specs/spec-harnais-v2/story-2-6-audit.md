@@ -1,5 +1,5 @@
 ---
-status: review
+status: done
 story: "2.6"
 title: Audit sans les faux positifs de s1, signalement du décodage autorégressif (CAP-9, audit de CAP-3)
 ---

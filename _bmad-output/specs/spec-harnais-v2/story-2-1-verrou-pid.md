@@ -1,5 +1,5 @@
 ---
-status: review
+status: done
 story: "2.1"
 title: Verrou de séance avec PID et session-unlock (CAP-7)
 ---

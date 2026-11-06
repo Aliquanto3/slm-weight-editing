@@ -1,6 +1,6 @@
 # Statuts des epics 1 (spec-slm-weight-editing) et 2 (spec-harnais-v2) ; id N de stories.yaml = story E.N. Mis à jour par l orchestrateur du run.
 generated: 2026-11-04 08:48
-last_updated: 2026-11-06 07:43
+last_updated: 2026-11-06 17:52
 project: slm-weight-editing
 tracking_system: file-system
 story_location: _bmad-output/specs/spec-slm-weight-editing
@@ -70,7 +70,7 @@ action_items:
     epic: 2
     action: "A-7 Release seulement après CI verte de main sur le commit tagué"
     owner: "orchestrateur"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-11-06.md"
   - id: "epic-2-retro-item-8-a-8-rejouer-l-audit-sur-la-transcription"
     epic: 2
@@ -91,7 +91,7 @@ action_items:
     action: "A-10 Levée de point d arrêt ne délègue pas les questions de protocole
       : decisions-a-confirmer.md validé par Anaël avant fusion"
     owner: "orchestrateur"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-11-06.md"
   - id: "epic-2-retro-item-11-a-11-sortir-l-exemption-de-lecture-ast-e"
     epic: 2
@@ -110,5 +110,5 @@ action_items:
     action: "A-13 Journaliser chaque CI rouge et passer le status des fiches harnais
       v2 à done"
     owner: "orchestrateur"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-11-06.md"

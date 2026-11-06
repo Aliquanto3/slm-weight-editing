@@ -23,4 +23,4 @@
 ## Conventions
 
 - Commits : `Préfixe: description en français` (`Feat:`, `Fix:`, `Docs:`, `Chore:`, `Exp:`).
-- Versionnage SemVer dans `pyproject.toml` et `__init__.py`, tag annoté et release GitHub à chaque lot livré.
+- Versionnage SemVer dans `pyproject.toml` et `__init__.py`, tag annoté et release GitHub à chaque lot livré. Release seulement après une CI verte de `main` sur le commit tagué : `gh run list --branch main --commit <sha>`, puis `gh run watch <id> --interval 60` jusqu'au vert, avant `gh release create`.

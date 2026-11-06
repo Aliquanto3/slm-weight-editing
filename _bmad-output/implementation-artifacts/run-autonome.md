@@ -17,6 +17,8 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 - Chaîne par story : dev-story (Sonnet) → second-avis (Haiku) → reviewer (Opus, avec la liste du second avis) → PR → CI verte → fusion par merge commit.
 - Cadrage : pas de fichier BMAD par story ; l'orchestrateur écrit les critères Given/When/Then dans le prompt de dev-story d'après `SPEC.md` et `invoke_dev_with`.
 - Points d'arrêt (consigne d'Anaël du 2026-11-05) : relecture de la spec par Anaël avant 2.4, 2.5, 2.6 et 2.8 (`spec_checkpoint`) ; arrêt après 2.7 pour l'essai Ollama d'Anaël (`done_checkpoint`). Si l'essai échoue, CAP-10 et 2.8 sortent de s2.
+- Levée d'un point d'arrêt (A-10 de la rétro de l'Epic 2, pour les runs suivants) : elle ne délègue pas les questions de protocole, de méthode ou de publication. L'orchestrateur ne tranche que les questions techniques ; les autres vont dans `decisions-a-confirmer.md` (question, story, réponse proposée), qu'Anaël valide avant la fusion de la story concernée.
+- Release (A-7) : seulement après une CI verte de `main` sur le commit tagué, vérifiée par `gh run watch <id> --interval 60`.
 - Fichiers d'état du run : jamais dans une PR de story, PR `chore/etat-run-*` à part.
 - Suite complète : la CI de branche (trois OS) sert de porte de fusion. Attente : `gh run watch <id> --interval 60`.
 - Aucun Ollama, aucun téléchargement de modèle, aucune séance d'édition lancés par un agent.
@@ -124,16 +126,19 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 - 2026-11-06 05:26 · 2.4 · review · passe 1 : 2 Important corrigés (logits par blocs de 256 depuis final_norm, message 64 textes), BOM accepté ; 2 low écartés · 49bf4d1
 - 2026-11-06 05:26 · 2.4 · review · passe 2 lancée sur 1574b9a..49bf4d1 (correctif medium non trivial) · 49bf4d1
 - 2026-11-06 05:26 · 2.5 · report · la branche 2.5 devra intégrer 49bf4d1 (probe.py) avant revue · 
+- 2026-11-06 05:28 · 2.4 · CI · rouge (test_probe, égalité bit à bit dépendante du nombre de lignes de la matmul BLAS, ubuntu et macos ; run 42162476468, noté a posteriori, A-13) · 49bf4d1
 - 2026-11-06 05:33 · 2.4 · review · passe 2 : 1 Important corrigé (logits indépendantes du nombre de lignes de la matmul, blocs complétés à 16 lignes) ; passe 3 remplacée par relecture de l'orchestrateur (diff de 19 lignes) · 2527afe
 - 2026-11-06 05:33 · 2.4 · CI · verte sur les trois OS · 2527afe
 - 2026-11-06 05:33 · 2.4 · fusion · PR #27 fusionnée, MERGED vérifié ; report : vérifier la garde d'égalité et la mémoire sur Qwen3.5 en CUDA (identité bit à bit non garantie sous cuBLAS) · a691faa
 - 2026-11-06 05:34 · 2.8 · dev · lancé (Sonnet, wt-2-8 sur main, en parallèle de 2.5) · a691faa
 - 2026-11-06 05:36 · 2.5 · dev · fini, PR #28 base main (12 amendements traités ; écarts : messages du harnais par ligne générique EDITOR_WAY, refus si cwd hors espace, onFailure non posé) · 1af7812
 - 2026-11-06 05:36 · 2.5 · second-avis · lancé (Haiku) · 1af7812
+- 2026-11-06 05:38 · 2.5 · CI · rouge (crochet : .venv/bin/python résolu vers la base, ModuleNotFoundError, ubuntu et macos ; run 42163425475, noté a posteriori, A-13) · 1af7812
 - 2026-11-06 05:41 · 2.5 · second-avis · 7 constats, aucun high (medium : abréviation --tex non contrôlée, faux refus des notes citant heldout/cadrage ; cwd 8.3 bloquant, réévalué medium car TEMP est en 8.3 sur ce poste) · 1af7812
 - 2026-11-06 05:41 · 2.5 · review · passe 1 lancée (Opus) · 1af7812
 - 2026-11-06 05:46 · 2.8 · dev · fini, PR #29 (26 tests ; lm_head toujours au diff, multi-fichiers refusé) · 90cccf8
 - 2026-11-06 05:46 · 2.8 · second-avis · lancé (Haiku) · 90cccf8
+- 2026-11-06 05:49 · 2.8 · CI · rouge (test_lm_head, modèle projeté en mémoire sur un fichier réécrit, ubuntu ; run 42164411698, noté a posteriori, A-13) · 90cccf8
 - 2026-11-06 05:54 · 2.5 · review · passe 1 : 1 Important corrigé (cwd en nom 8.3 refusé par le crochet) ; --tex, faux refus « heldout » en prose, fuite is_file de probe reportés (low, antérieurs) ; passe 2 remplacée par relecture de l'orchestrateur · a63c436
 - 2026-11-06 05:54 · 2.5 · CI · rouge ubuntu et macos : interpréteur du crochet introuvable (.venv/bin/python résolu vers la base) · a63c436
 - 2026-11-06 05:54 · 2.5 · décision · correctif de l'orchestrateur : chemin de l'interpréteur non résolu, repli sur le venv courant · 3c154c2
@@ -141,6 +146,7 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 - 2026-11-06 05:54 · 2.8 · review · passe 1 lancée (Opus) · 90cccf8
 - 2026-11-06 05:54 · 2.7 · décision · Anaël autorise Ollama (« Ollama est disponible actuellement, tu peux t'en servir ») ; GPU libre vérifié · 
 - 2026-11-06 05:54 · 2.7 · recette · essai = témoin = officiel mot pour mot ×8, temps +0 %, taille +26,1 % ; CAP-10 maintenu, seuil de taille de la décision 5 soumis à Anaël · PR #30
+- 2026-11-06 05:58 · 2.8 · CI · rouge (test_lm_head, même cause, ubuntu ; run 42165327327, noté a posteriori, A-13) · 23149d1
 - 2026-11-06 06:00 · 2.5 · CI · rouge macos (test rule_path : /home résolu en /System/Volumes/Data/home), test corrigé par l'orchestrateur · 53fe45e
 - 2026-11-06 06:00 · 2.5 · CI · verte sur les trois OS · 53fe45e
 - 2026-11-06 06:00 · 2.5 · fusion · PR #28 fusionnée, MERGED vérifié · bd8a86e
@@ -149,7 +155,7 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 - 2026-11-06 06:00 · 2.6 · dev · lancé (Sonnet, wt-2-6 sur main) · e512639
 - 2026-11-06 06:01 · 2.8 · review · passe 2 : 1 Important corrigé (sauvegarde .detach-bak comptée dans work/ et publiée au gel ; déplacée dans <séance>/detach-bak, reprise _recover) ; passe 3 lancée avec merge de main · 47a84c5
 - 2026-11-06 06:10 · 2.8 · review · passe 3 : 0 Important ; merge de main (2.5) fait, un conflit dans audit_transcript.py résolu · 915c1dd
-- 2026-11-06 06:10 · 2.8 · CI · rouge : test lm_head sous Linux (modèle projeté en mémoire sur le fichier réécrit, défaut du test, corrigé par l'orchestrateur) ; probe sous Windows (écart d'1 ulp, main vert sur les mêmes tests : instabilité à confirmer) · f53b77e
+- 2026-11-06 06:10 · 2.8 · CI · rouge : test lm_head sous Linux (modèle projeté en mémoire sur le fichier réécrit, défaut du test, corrigé par l'orchestrateur) ; probe sous Windows (écart d'1 ulp, main vert sur les mêmes tests : instabilité à confirmer ; run 42166287347 sur 915c1dd, rouge aussi sur windows, f53b77e est le correctif) · 915c1dd
 - 2026-11-06 06:10 · 2.6 · dev · fini, PR #31 (44 tests ; codes 0/1/2, ancien 2 → 3) · 5190597
 - 2026-11-06 06:10 · 2.6 · second-avis · lancé (Haiku) · 5190597
 - 2026-11-06 06:13 · 2.8 · CI · verte sur les trois OS (probe Windows passé : écart d'1 ulp instable, report) · f53b77e
@@ -163,3 +169,5 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 - 2026-11-06 06:45 · 2.6 · fusion · PR #31 fusionnée, MERGED vérifié ; Epic 2 terminé · cd23d51
 - 2026-11-06 06:45 · run · report · à Anaël : seuil de taille de CAP-10 (+26,1 %) ; essai à blanc de 2.5 (crochet en dontAsk, Read(//c/…), /hooks /memory /mcp /plugin) ; rejeu de l'audit sur s1 (critère 8 de 2.6) ; vérif. probe sur Qwen3.5 en CUDA ; flakiness d'1 ulp de test_probe sous Windows ; allow_abbrev (--tex) ; modèles Ollama qwen35-temoin et qwen35-output-test laissés en place ; release v0.2.0 à décider · cd23d51
 - 2026-11-06 06:45 · run · ménage · worktrees wt-2-4, wt-2-5, wt-2-6, wt-2-8, wt-doc25, wt-res27 retirés, branches locales fusionnées supprimées ; branches distantes soumises à Anaël · cd23d51
+- 2026-11-06 06:52 · run · CI · rouge (test_probe, les 3 tests d'égalité bit à bit, ubuntu ; run 42170697097 sur main après la fusion de #32, noté a posteriori, A-13) · f46c604
+- 2026-11-06 17:52 · run · décision · rétro de l'Epic 2 : A-7 (release après CI verte de main, AGENTS.md et modèle de run du kit), A-10 (decisions-a-confirmer.md, modèle de run du kit), A-13 (CI rouges rattrapées au journal, fiches 2.1 à 2.8 en done) · —

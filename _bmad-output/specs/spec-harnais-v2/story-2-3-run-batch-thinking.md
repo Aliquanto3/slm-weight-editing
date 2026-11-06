@@ -1,5 +1,5 @@
 ---
-status: review
+status: done
 story: "2.3"
 title: run-batch --thinking on|off (CAP-2)
 ---

@@ -1,5 +1,5 @@
 ---
-status: review
+status: done
 story: "2.8"
 title: lm_head détaché, n'éditer que la sortie (CAP-10)
 ---
