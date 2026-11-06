@@ -1,6 +1,6 @@
 # Statuts des epics 1 (spec-slm-weight-editing) et 2 (spec-harnais-v2) ; id N de stories.yaml = story E.N. Mis à jour par l orchestrateur du run.
 generated: 2026-11-04 08:48
-last_updated: 2026-11-06 07:30
+last_updated: 2026-11-06 07:43
 project: slm-weight-editing
 tracking_system: file-system
 story_location: _bmad-output/specs/spec-slm-weight-editing
@@ -43,14 +43,14 @@ action_items:
     action: "A-3 Liste de contrôle POSIX dans le prompt de dev-story (lien du venv,
       realpath macOS, mmap Linux, déterminisme BLAS)"
     owner: "orchestrateur"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-11-06.md"
   - id: "epic-2-retro-item-4-a-4-ne-lancer-une-passe-de-revue-qu-avec"
     epic: 2
     action: "A-4 Ne lancer une passe de revue qu avec l état de la CI de la branche
       ; CI rouge corrigée d abord"
     owner: "orchestrateur"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-11-06.md"
   - id: "epic-2-retro-item-5-a-5-story-à-risque-pour-toute-story-qui"
     epic: 2
