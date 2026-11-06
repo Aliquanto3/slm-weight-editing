@@ -118,3 +118,13 @@ Relu `90cccf8..23149d1`. Tests ciblés verts (lm_head, freeze, audit_transcript,
 - Nit · low · revue · rejeté : restauration en échec dans le `except` ; l'exception d'origine reste chaînée et la sauvegarde, hors de work/, est reprise au détachement suivant.
 - `_check_detached_config` et le refus d'une transformation non rejouable au gel : conformes (une config déliée avec d'autres modifications reste signalée par `files_changed`).
 - Complexité : 0 constat.
+
+### Passe 3 (2026-11-06, SHA revu 47a84c5)
+
+Relu `23149d1..47a84c5`, puis fusion de main (e512639 : stories 2.4 et 2.5, crochet de refus, OPERATEUR.md, BLOCAGES.md au gel) par merge commit. Conflit d'`audit_transcript.py` résolu en gardant `ALLOWED_WAYS` / `refusal_message` et `detach-lm-head` dans `ALLOWED_SUBCOMMANDS` et la liste des commandes des voies permises ; la liste fermée des appels permis de `test_espace_lecture.py` inclut la commande detach de la consigne (le crochet la laisse passer). `freeze.py`, CLI et consignes fusionnés sans conflit, vérifiés. Tests ciblés verts (lm_head, freeze, audit_transcript, session_workspace, espace_lecture, harness, report_gguf, probe ; invariants 10 / 28 / 73 inclus), ruff vert.
+
+- Vérifié · `<séance>/detach-bak/` : hors de `work/`, donc ni haché (`work_file_hashes`), ni publié au gel (seuls work/ et l'original sont lus), ni dans `files_changed` ; non écrivable par l'éditeur (crochet : écriture limitée à scripts/, notes/, EDITION.md, work/*.safetensors ; run-script : work/ et scripts/) ; lisible comme tout l'espace, sans effet (copie de la base). Une sauvegarde d'un détachement journalisé n'est jamais restaurée (un seul détachement par séance, `_recover` nettoie seulement) ; un `.tmp` laissé dans `detach-bak/` est déplacé puis retiré de work/ dans le même appel.
+- Nit · low · revue · reporté : processus tué avant la ligne de journal, puis l'éditeur écrit dans `work/model.safetensors` avant de relancer `detach-lm-head` : `_recover` restaure la sauvegarde et efface ces écritures sans le dire. Cas rare (état déjà incohérent, refusé au gel) ; piste : ne restaurer le tenseur que si le fichier de work/ manque ou contient `lm_head.weight`, et l'écrire dans la sortie.
+- Nit · low · revue · reporté : si `_append_journal` lève après avoir écrit la ligne (fsync), work/ est restauré alors que le journal dit « détaché » : gel et détachement refusés. Fenêtre très étroite, même famille que la passe 1.
+- Nit · low · revue · corrigé : docstrings de `workspace.py` disaient « quatre commandes » (cinq désormais).
+- Complexité : 0 constat.
