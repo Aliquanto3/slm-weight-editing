@@ -34,12 +34,22 @@ uv run<EXTRA> slm-weight-editing detach-lm-head --session <ID_SEANCE> --sessions
 - Les sorties de chaque lot sont dans `sessions/<ID_SEANCE>/journal.jsonl` : lis-le avec l'outil de lecture de fichiers, jamais par une commande.
 - Écris les commandes telles quelles, sans variable d'environnement devant, sans `cd`, sans tube ni redirection.
 
+## Lire l'espace
+
+Tout ce dossier se lit librement, par Read, Grep et Glob comme par tes scripts : `CONSIGNE.md`, `notes/`, `EDITION.md`, `data/`, `runs/`, `probes/`, `sessions/<ID_SEANCE>/` (journal, état, `work/`), `.claude/settings.json` et `workspace.json`. Rien au-delà de ce dossier. Les instructions d'Anaël sont hors de l'espace.
+
 ## Écrire et lancer un script
 
 - Tes scripts vivent dans `scripts/` (outils d'écriture de fichiers). Tes notes vont dans `notes/` ou `EDITION.md`.
-- Un script lancé par `run-script` tourne depuis ce dossier, dans un Python isolé : il lit `sessions/<ID_SEANCE>/work/`, `scripts/`, `data/` et `probes/`, il écrit seulement dans `work/` et `scripts/`. Modules permis : la bibliothèque standard, `numpy`, `safetensors.numpy` et tes modules de `scripts/`.
+- Un script lancé par `run-script` tourne depuis ce dossier, dans un Python isolé : il lit tout ce dossier (et rien au-delà), il écrit seulement dans `work/` et `scripts/`. Modules permis : la bibliothèque standard, `numpy`, `safetensors.numpy` et tes modules de `scripts/`.
 - `safetensors.numpy` : `load_file(chemin)` rend un dictionnaire de tableaux numpy ; bfloat16 n'existe pas en numpy, ses tenseurs arrivent en `uint16` (16 bits de poids fort d'un float32 : `(u16.astype(np.uint32) << 16).view(np.float32)`). Pour réécrire : `save_file(tenseurs, chemin, dtypes={"<nom>": "BF16"})` avec un tableau `uint16` pour chaque tenseur bfloat16. Tu peux aussi modifier le fichier en place avec `np.memmap`.
-- Tout le reste est refusé à l'exécution et arrête le script : modèle (torch, transformers, llama.cpp...), réseau, sous-processus, ctypes, liens, lecture hors des dossiers ci-dessus, écriture hors de `work/` et `scripts/`, écriture de l'état de séance.
+- Tout le reste est refusé à l'exécution et arrête le script : modèle (torch, transformers, llama.cpp...), réseau, sous-processus, ctypes, liens, lecture hors de ce dossier, écriture hors de `work/` et `scripts/`, écriture de l'état de séance.
+
+- Décodage autorégressif interdit dans `run-script` : aucune boucle qui réinjecte une sortie du modèle (jeton prédit, logits ou activations d'un pas) pour calculer le pas suivant, aucun échantillonnage ni recherche de jetons. Un forward numpy sur des textes fixes reste du calcul matriciel permis. Pour générer, `run-batch --thinking on` (ou `off`) ; pour des activations ou des logits, `probe`.
+
+## Refus et blocages
+
+Chaque refus nomme sa règle (`commande-hors-liste`, `lecture-hors-espace`, `ecriture-hors-liste`, `web`...) et ce qui est permis à la place. Note ce qui te bloque dans `notes/BLOCAGES.md` (ce que tu voulais faire, le refus reçu, ce que tu as fait à la place) : ce fichier est publié avec le gel.
 
 ## Ce qui est interdit
 

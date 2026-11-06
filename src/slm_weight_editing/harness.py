@@ -71,6 +71,13 @@ _SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _PROMPT_KEYS = ("question", "problem")
 
 
+# Voie permise rappelée sous chaque refus d'une commande de l'éditeur (story 2.5, CAP-6).
+EDITOR_WAY = (
+    "Permis : run-batch, session-status, run-script et probe ; état et budget par "
+    "session-status ; blocage à noter dans notes/BLOCAGES.md"
+)
+
+
 class HarnessError(RuntimeError):
     """Refus du harnais (protocole) ou séance illisible."""
 
@@ -966,6 +973,8 @@ def run(args: argparse.Namespace) -> int:
             print(CEILING_NOTE)
     except HarnessError as exc:
         print(f"Erreur : {exc}", file=sys.stderr)
+        if args.command in ("run-batch", "session-status"):
+            print(EDITOR_WAY, file=sys.stderr)
         return exc.exit_code
     except OSError as exc:
         print(f"Erreur : {exc}", file=sys.stderr)

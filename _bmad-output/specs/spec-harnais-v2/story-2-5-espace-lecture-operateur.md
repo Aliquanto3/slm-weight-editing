@@ -1,5 +1,5 @@
 ---
-status: decided
+status: review
 story: "2.5"
 title: Espace de séance, lecture libre, OPERATEUR.md, refus expliqués, BLOCAGES.md (CAP-4, CAP-5, CAP-6, consigne de CAP-3)
 ---
@@ -121,3 +121,36 @@ Lignes citées sur main@34b20e7.
 12. Le crochet compare en minuscules (`normalize`, audit l. 188), pour que le motif soit donné quelle que soit la casse (`HELDOUT`, `Workspace.json`).
 
 Si le crochet réutilise l'audit (2), les points 4 et 12 sont des corrections de l'audit lui-même et protègent aussi la troisième couche : traiter 1, 2 et 4 ensemble.
+
+## Réalisation (2026-11-06) et écarts
+
+Amendements 1 à 12 traités. Le crochet (`_refusal_hook.py`) appelle `audit_transcript.check_tool_use` avec le `Context` de `workspace.json` ; la racine vient de l'argument, les chemins relatifs du `cwd` reçu, et `_absolute` de l'audit résout liens et jonctions (`os.path.realpath`), refuse `//?/`, `//./`, UNC, `~` et `:` hors lecteur : le crochet et l'audit (troisième couche) en profitent ensemble. Tests : `tests/test_espace_lecture.py`.
+
+Écarts :
+- Harnais (critère 3, famille « budget, gel, verrou ») : les ~50 messages de `HarnessError` ne sont pas réécrits un à un ; les quatre commandes de l'éditeur ajoutent sous chaque refus la ligne `harness.EDITOR_WAY` (commandes permises, état par `session-status`, `notes/BLOCAGES.md`). Pas d'identifiant de règle sur ces refus.
+- Nouvelle règle `import-interdit` dans `RULES` (refus d'import du lanceur) ; `ALLOWED_WAYS` couvre toutes les règles, `_sandbox.WAYS` en est un sous-ensemble (test).
+- Le crochet refuse aussi tout appel dont le `cwd` reçu n'est pas l'espace (`hors-espace-seance`, comme l'audit le fait par transcription).
+- `onFailure` non posé : la doc (v2.1.295+) permet `"block"`, mais la décision 2 garde « crochet en échec, deny décident ».
+- Lecture libre dans l'audit : seul `.claude/` est exempté, et seulement pour une lecture par outil dans l'espace ; `docs/`, `tests/`... restent signalés même dans l'espace. `open(...)` en lecture d'un nom protégé n'est plus signalé ; un texte qui lit le journal et écrit ailleurs (`json.dump`, `open(..., "w")`) reste signalé `etat-seance` (analyse du texte entier) : faux positif à relire. `os.open` n'est une lecture qu'avec `os.O_RDONLY` seul.
+- Balayage des liens (`audit_workspace_links`) : espace absent, pas de balayage (déjà signalé par les réglages).
+- Tests : `workspace.OPERATOR_DIR` est redirigé vers un dossier temporaire par une fixture de `conftest.py`, pour ne rien écrire dans `models/` du dépôt.
+- Reste à l'essai à blanc d'Anaël : crochet en `dontAsk`, combinaison avec `blockReads…`, deny `Read(//c/…)`, coût par appel (~0,1 s mesuré pour l'import).
+- README non mis à jour (documentation de la story à faire d'après cette fiche).
+
+## Revue
+
+### Passe 1 (2026-11-06, SHA revu 1af7812)
+
+Branche à jour de main (a691faa). Second avis (Haiku) repris point par point.
+
+- **Important** · medium · second avis 3 (réévalué de low) · corrigé · `_refusal_hook.violations` passait le `cwd` reçu par `_absolute`, qui rend None sur `~` : un espace ouvert par un chemin en nom court 8.3 (TEMP de ce poste : `C:\Users\UTILIS~1\...`) voyait **tous** ses appels refusés (`hors-espace-seance`), alors que l'audit (`_cwd_ok`, `Path.resolve`) l'accepte. Le `cwd` vient de Claude Code, donnée de confiance : il est maintenant résolu par `os.path.realpath` (noms longs, liens) puis comparé ; un `cwd` relatif reste refusé. Test `test_hook_accepts_short_name_cwd_of_the_workspace` (échoue sans le correctif).
+- Rejeté · écart du développeur (refus de tout `cwd` différent de l'espace) · le `cwd` ne peut pas bouger : `cd`, `pushd`, `Set-Location`… sont dans les deny (`DENIED_COMMANDS`, `DENIED_CMDLETS`) et hors de la liste blanche de l'audit ; l'audit des transcriptions applique déjà la même égalité. Pas de faux refus en séance normale.
+- Rejeté · écart du développeur (`onFailure` non posé) · conforme à la décision 2 (crochet explicatif, deny = porte).
+- **Pre-existing** · low · second avis 1 · reporté · abréviations argparse (`--tex`, `--da`, `--sess`) non vues par `_check_options` (`_BOUND_OPTIONS` vient de la story 2.4). Vérifié : `probe` refuse `--texts` hors de l'espace à l'exécution, `run-batch` contrôle ses données et sa séance ; l'audit n'est que la troisième couche. Piste : `allow_abbrev=False` sur les sous-parseurs de l'éditeur (change la CLI, `--sessions` est toléré aujourd'hui).
+- **Pre-existing** · low · revue · reporté · `probe` teste `texts.is_file()` avant le contrôle « hors de l'espace » : le message distingue un fichier absent d'un fichier existant hors de l'espace (oracle d'existence). Inverser les deux contrôles.
+- **Pre-existing** · low · second avis 2 · rejeté pour la story · un Write/Edit dont le contenu nomme `heldout`, `cadrage`, `weight-space` ou `operateur` est refusé : règle de l'audit antérieure (contenu passé à `_check_code`), que le crochet ne fait que rendre visible (amendement 2 : refus si et seulement si l'audit signale). Le motif nomme le terme, l'éditeur peut reformuler ; « opérateur » accentué n'est pas touché. Piste : un motif propre aux écritures plutôt que « tout l'espace est lisible ».
+- Nit · low · second avis 4 · rejeté · `_SAFE_PATH` refuse un dépôt sous un chemin avec espace, avec un message clair ; règle v1.
+- Nit · low · second avis 5 · rejeté · un Edit de `STATE.json` hors des `allow` est refusé par `dontAsk`, puis par le crochet et l'audit (insensibles à la casse).
+- Nit · low · second avis 6 · reporté (déjà prévu) · forme `Read(//c/...)` à confirmer à l'essai à blanc d'Anaël.
+- Rejeté · low · second avis 7 · publication de `BLOCAGES.md` au gel : décision 5, chemins personnels masqués par `public_text`.
+- Complexité : 0 constat (balayage des liens en O(n) à l'audit seulement ; le crochet ne relit ni journal ni historique).

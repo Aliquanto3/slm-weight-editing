@@ -159,6 +159,14 @@ def no_real_cuda(monkeypatch):
     monkeypatch.setattr(harness, "_cuda_free_bytes", no_gpu)
 
 
+@pytest.fixture(autouse=True)
+def operator_dir_outside_repo(tmp_path_factory, monkeypatch):
+    """OPERATEUR.md des espaces de test : dans un dossier temporaire, jamais dans le dépôt."""
+    from slm_weight_editing import workspace
+
+    monkeypatch.setattr(workspace, "OPERATOR_DIR", tmp_path_factory.mktemp("operateur"))
+
+
 @pytest.fixture
 def synth(tmp_path: Path) -> Synth:
     return build(tmp_path)

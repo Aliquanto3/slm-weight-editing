@@ -655,7 +655,6 @@ def test_sandbox_executes_the_copy_not_the_mutable_file(ws):
         "sha256": hashlib.sha256(b"print('copie')").hexdigest(),
         "workspace": str(ws),
         "read_roots": [str(ws / "scripts")],
-        "read_files": [],
         "write_roots": [str(ws / "scripts"), str(ws / "scripts")],
         "python_roots": script_runner._python_roots(),
     }
