@@ -32,4 +32,4 @@ Aucun message d'erreur.
 
 **CAP-10 maintenu** selon le critère du protocole : Ollama charge le `output.weight` séparé et répond mot pour mot comme le témoin.
 
-Réserve pour Anaël : la décision 5 de la fiche 2.8, prise par l'orchestrateur le 2026-11-06, faisait sortir CAP-10 au-delà de +25 % de taille. Les +26,1 % sont structurels : c'est le coût d'une matrice de sortie Q8_0 non liée, connu dès la story 2.7 (+270 Mo). Ce seuil était donc mal choisi. L'orchestrateur propose de ne garder que le critère de temps de réponse (+20 %), qui n'est pas atteint. **La décision sur la taille revient à Anaël.**
+Seuil de taille : la décision 5 de la fiche 2.8, prise par l'orchestrateur le 2026-11-06, faisait sortir CAP-10 au-delà de +25 % de taille. Les +26,1 % sont structurels (coût d'une matrice de sortie Q8_0 non liée, connu dès la story 2.7). **Anaël a remonté le seuil à +30 % le 2026-11-06** : CAP-10 est maintenu sur les deux critères (taille +26,1 % < 30 %, temps de réponse +0 % < 20 %).

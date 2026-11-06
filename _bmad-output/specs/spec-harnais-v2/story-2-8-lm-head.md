@@ -77,11 +77,11 @@ Anaël a levé ses points d'arrêt de relecture le 2026-11-06 (« Retire mes poi
 2. `detach-lm-head`. Il ne consomme ni lot ni jeton de probe, mais il est journalisé et refusé après le gel.
 3. Permis à tout moment. On copie l'embed courant de `work/` (éventuellement déjà édité). Le diff rejoue les transformations dans l'ordre, donc le résultat reste vérifiable.
 4. Champ `lm_head_detached` dans le rapport et mention « écart de protocole » dans la comparaison au MIT.
-5. Story codée sans attendre l'essai 2.7. CAP-10 sort de s2 si l'essai 2.7 échoue, ou si le GGUF détaché dépasse le témoin de plus de 25 % en taille ou de 20 % en temps de réponse médian au banc.
+5. Story codée sans attendre l'essai 2.7. CAP-10 sort de s2 si l'essai 2.7 échoue, ou si le GGUF détaché dépasse le témoin de plus de 30 % en taille (seuil remonté de 25 à 30 % par Anaël le 2026-11-06, après l'essai : +26,1 %, structurel) ou de 20 % en temps de réponse médian au banc.
 
 ## Réalisation (2026-11-06)
 
-Codée sans attendre l'essai Ollama de 2.7 (décision 5) : la commande ne sert en s2 que si l'essai conclut « CAP-10 maintenu » et si le GGUF détaché reste sous 25 % de taille et 20 % de temps de réponse médian de plus que le témoin.
+Codée sans attendre l'essai Ollama de 2.7 (décision 5) : la commande ne sert en s2 que si l'essai conclut « CAP-10 maintenu » et si le GGUF détaché reste sous 30 % de taille et 20 % de temps de réponse médian de plus que le témoin.
 
 - Nouvelle commande `detach-lm-head` (module `lm_head.py`, parser et aiguillage dans `harness.py`) : verrou de séance, refus après le gel, une fois, ligne `detach_lm_head` au journal (source, sha256 de l'embed et de `lm_head`, sha256 du fichier réécrit, sha256 avant et après de `config.json`, clés écrites). Écriture : `model.safetensors` réécrit avec le tenseur en plus (option (a), remplacement atomique) ; refus d'un checkpoint à `model.safetensors.index.json`.
 - `freeze.py` : `FORMAT` `edit-diff-v2` (v1 toujours lu), champ `detached_lm_head`, entrée `added` pour `lm_head.weight` (toujours émise, même sans édition : le détachement doit se rejouer), `config.json` délié reconnu seulement si la transformation recalculée redonne le sha256 journalisé, rejeu par `apply-diff`.
