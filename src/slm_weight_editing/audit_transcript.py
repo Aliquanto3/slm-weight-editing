@@ -116,6 +116,7 @@ ALLOWED_INTERNAL_MODULES: tuple[str, ...] = ()
 # Outils de séance ; tout autre outil (WebFetch, WebSearch, Agent, Skill, mcp__*...) échoue.
 FILE_READ_TOOLS = {"Read", "Grep", "Glob", "LSP"}
 FILE_WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
+_FRAGMENT_TOOLS = {"Edit", "MultiEdit", "NotebookEdit"}  # contenu partiel du fichier
 SHELL_TOOLS = {"Bash", "PowerShell"}
 NEUTRAL_TOOLS = {"TodoWrite", "AskUserQuestion", "ToolSearch", "EnterPlanMode", "ExitPlanMode"}
 WEB_TOOLS = {"WebFetch", "WebSearch"}
@@ -190,7 +191,7 @@ _WRITE_VERB = re.compile(
     r"|\btee\b|tee-object|\btruncate\b|\btouch\b|\bsed\b[^|;&]*\s-i|\bperl\b[^|;&]*\s-[a-z]*i"
     r"|\bdd\b|>|\bunlink\b|\bshred\b|\bchmod\b|\battrib\b|\bicacls\b|\bln\b|mklink|robocopy"
     r"|xcopy|\.write|os\.remove|os\.replace|os\.rename|shutil|rmtree|\.unlink"
-    r"|\.rename|\.replace\s*\(|\.touch|write_text|write_bytes|json\.dump|\bsave\w*\s*\("
+    r"|\.rename|\.replace\s*\(|\.touch|write_text|write_bytes|json\.dump\b|\bsave\w*\s*\("
 )
 _DELETE_VERB = re.compile(
     r"\brm\b|\brmdir\b|\bdel\b|\berase\b|\brd\b|remove-item|\bri\b|rmtree|shutil|\bmv\b"
@@ -368,10 +369,10 @@ def _parse_trees(text: str) -> list[ast.AST]:
     return [t for line in text.split("\n") if (t := _parse_one(line.strip())) is not None]
 
 
-_READ_CALLS = {"open", "read_text", "read_bytes"}
+_TABLE_READS = {"read_json", "read_csv", "read_parquet", "read_table"}  # pandas
+_READ_CALLS = {"open", "read_text", "read_bytes", *_TABLE_READS}
 # Valeur d'une affectation qui ne lie pas un chemin : le résultat d'une lecture.
 _READ_RESULTS = _READ_CALLS | {"read", "readline", "readlines", "load", "loads", "splitlines"}
-_COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
 # Seuls appels admis sur une ligne de lecture : tout autre appel (`os.link`, `sqlite3.connect`,
 # `map(f, ...)`) peut écrire ou lier le chemin lu, la ligne reste alors comptée.
 _HARMLESS_CALLS = _READ_RESULTS | {
@@ -427,6 +428,7 @@ _HARMLESS_CALLS = _READ_RESULTS | {
     "abs",
     "round",
     "reversed",
+    "dumps",
 }
 _OPEN_KEYWORDS = {"mode", "buffering", "encoding", "errors", "newline"}
 _BINDERS = (
@@ -440,6 +442,34 @@ _BINDERS = (
     ast.Nonlocal,
     ast.Delete,
     ast.NamedExpr,
+)
+
+
+_OPEN_MODULES = {"io", "codecs", "gzip", "bz2", "lzma", "os"}
+_PATH_READS = {"read_text", "read_bytes", "open", "exists", "is_file", "is_dir"}
+# Le fichier ouvert reste joignable par son nom (`f.name`, `f.fileno()`), un nom par `globals()` :
+# aucune ligne n'est alors allégée.
+_NO_EXEMPTION = re.compile(
+    r"\.\s*(?:name|fileno|buffer|raw)\b|\bsys\s*\.\s*modules\b"
+    r"|\b(?:globals|locals|vars|getattr|setattr|delattr|__dict__|__main__|_getframe|f_globals"
+    r"|f_locals|f_back|inspect|gc)\b"
+)
+_SHADOWED = r"(?:open|print|Path|PurePath|io|codecs|gzip|bz2|lzma|os|json|np|numpy|pd|pandas)"
+# Redéfinition d'un nom dont l'allègement suppose le sens habituel (`print = lambda p: ...`).
+_SHADOWING = re.compile(
+    rf"\b(?:def|class)\s+{_SHADOWED}\b"
+    rf"|(?<!\bimport numpy )(?<!\bimport pandas )\bas\s+{_SHADOWED}\b"
+    rf"|\b{_SHADOWED}\s*(?:\[[^\]\n]*\])?\s*(?::=|[-+*/|&^%@]?=(?!=))"
+    rf"|\b{_SHADOWED}\s*,[^=\n()]*=(?!=)"
+    rf"|\bfor\s+(?:(?!\bin\b)[\w\s,()])*\b{_SHADOWED}\b(?:(?!\bin\b)[\w\s,()])*\bin\b"
+    rf"|\b(?:global|nonlocal)\s+[\w\s,]*\b{_SHADOWED}\b"
+    rf"|\blambda\b[^:\n]*\b{_SHADOWED}\b[^:\n]*:"
+    rf"|\bdef\s+\w+\s*\([^)]*\b{_SHADOWED}\b"
+    r"|\bimport\b[^\n#]*\b(?:open|print)\b"
+    r"|\bfrom\s+(?!pathlib\b)\S+\s+import\b[^\n#]*\b(?:Path|PurePath)\b|\bimport\s*\*"
+    # Méthode homonyme d'un appel admis : `Path.read_text = ...`, `def read(self)`.
+    rf"|\bdef\s+(?:{'|'.join(sorted(_HARMLESS_CALLS))})\b"
+    rf"|\.\s*(?:{'|'.join(sorted(_HARMLESS_CALLS))}|__\w+__)\s*(?::=|[-+*/|&^%@]?=(?!=))"
 )
 
 
@@ -493,60 +523,165 @@ def _plain_names(target: ast.expr) -> bool:
     return isinstance(target, ast.Name)
 
 
-def _line_only_reads(line: str) -> bool:
-    """Vrai si la ligne est prouvée en lecture seule (AST) et ne lie aucun chemin à un nom.
-
-    Une seule instruction ; chaque `open` en mode de lecture littéral ; ni `:=` ni affectation
-    d'autre chose que le résultat d'une lecture (`p = Path(j); p.read_text()` reste compté).
-    """
-    tree = _parse_one(line.strip())
-    if tree is None or len(tree.body) != 1:
+def _mmap_reads(call: ast.Call) -> bool:
+    """`np.load` sans projection en écriture (`mmap_mode` absent, "r" ou "c")."""
+    mode = next((k.value for k in call.keywords if k.arg == "mmap_mode"), None)
+    if mode is None and len(call.args) > 1:
+        mode = call.args[1]
+    if any(k.arg is None for k in call.keywords) or any(
+        isinstance(a, ast.Starred) for a in call.args
+    ):
         return False
+    return mode is None or (isinstance(mode, ast.Constant) and mode.value in {None, "r", "c"})
+
+
+def _consumed(call: ast.Call) -> list[ast.AST]:
+    """Arguments qui ne sortent pas de l'appel : chemin d'une lecture, valeur affichée."""
+    func = call.func
+    if isinstance(func, ast.Name) and func.id == "print":
+        if all(k.arg in {"sep", "end", "flush"} for k in call.keywords):  # pas de `file=`
+            return [*call.args, *(k.value for k in call.keywords)]
+        return []
+    if _open_mode_reads(call) is True and call.args:
+        if isinstance(func, ast.Name) or (
+            isinstance(func.value, ast.Name) and func.value.id in _OPEN_MODULES
+        ):
+            return [call.args[0]]
+    module = (
+        func.value.id
+        if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name)
+        else ""
+    )
+    if call.args and (
+        (module in {"pd", "pandas"} and func.attr in _TABLE_READS)
+        or (module in {"np", "numpy"} and func.attr == "load" and _mmap_reads(call))
+    ):
+        return [call.args[0]]
+    if isinstance(func, ast.Attribute) and func.attr in _PATH_READS:
+        if func.attr == "open" and _open_mode_reads(call) is not True:
+            return []
+        path = func.value
+        if isinstance(path, ast.Name):  # `J.read_text()` : J lié à un chemin (`_path_binding`)
+            return [path]
+        if (
+            isinstance(path, ast.Call)
+            and isinstance(path.func, ast.Name)
+            and path.func.id in {"Path", "PurePath"}
+            and not path.keywords
+        ):
+            return list(path.args)
+    return []
+
+
+def _read_line_rest(line: str, need_read: bool = True) -> str | None:
+    """Ligne prouvée en lecture seule (AST), chemins lus et valeurs affichées effacés ; sinon None.
+
+    Une seule instruction ; chaque appel dans une liste blanche, chaque `open` en mode de lecture
+    littéral ; affectations à des noms seulement ; ni `def`, `lambda`, `import` ni `:=`. Le reste
+    rendu garde tout chemin qui n'est pas l'argument d'une lecture (`[(Path(j), l) for l in
+    open(j)]`, `paths.append(Path(j))`) : le nom protégé y reste visible.
+    """
+    source = line.strip()
+    tree = _parse_one(source)
+    if tree is None or len(tree.body) != 1:
+        return None
     reads = False
+    spans: list[tuple[int, int]] = []
     for node in ast.walk(tree):
         if isinstance(node, _BINDERS):
-            return False
+            return None
         if isinstance(node, ast.Call):
             mode_reads = _open_mode_reads(node)
             if mode_reads is False:
-                return False
+                return None
             name = _call_name(node)
             if name not in _HARMLESS_CALLS:
-                return False
+                return None
             reads = reads or bool(mode_reads) or name in _READ_CALLS
-        elif isinstance(node, ast.For | ast.AsyncFor | ast.comprehension):
-            # `for p in ["state.json"]` lie le chemin ; `for row in open(j)` lie une ligne lue.
-            it = node.iter
-            if not (
-                isinstance(it, ast.Name)
-                or (isinstance(it, ast.Call) and _call_name(it) in _READ_RESULTS)
-            ):
-                return False
+            spans += [
+                (a.col_offset, a.end_col_offset)
+                for a in _consumed(node)
+                if a.lineno == 1 and a.end_lineno == 1 and a.end_col_offset is not None
+            ]
         elif isinstance(node, ast.Assign | ast.AugAssign | ast.AnnAssign):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             if not all(_plain_names(t) for t in targets):
-                return False  # `d["state.json"] = ...`, `x.p = ...`
-            value = node.value
-            if isinstance(value, ast.Call):
-                if _call_name(value) not in _READ_RESULTS:
-                    return False
-            elif not isinstance(value, _COMPREHENSIONS):
-                return False
-    return reads
+                return None  # `d["state.json"] = ...`, `x.p = ...`
+    if need_read and not reads:
+        return None
+    raw = bytearray(source.encode("utf-8"))  # décalages de l'AST en octets UTF-8
+    for start, end in spans:
+        raw[start:end] = b" " * (end - start)
+    return raw.decode("utf-8", errors="replace")
 
 
-def _without_read_lines(text: str) -> str:
-    """Code sans les lignes prouvées en lecture seule (`open` en lecture, `read_text`...).
+def _path_binding(line: str) -> str | None:
+    """Nom lié à un chemin construit de littéraux (`j = "journal.jsonl"`, `J = Path(d) / "x"`)."""
+    tree = _parse_one(line.strip())
+    if tree is None or len(tree.body) != 1 or not isinstance(tree.body[0], ast.Assign):
+        return None
+    stmt = tree.body[0]
+    if len(stmt.targets) != 1 or not isinstance(stmt.targets[0], ast.Name):
+        return None
+    for node in ast.walk(stmt.value):
+        if isinstance(node, ast.Call):
+            if not (isinstance(node.func, ast.Name) and node.func.id in {"Path", "PurePath"}):
+                return None
+        elif not isinstance(
+            node,
+            ast.Constant
+            | ast.Name
+            | ast.JoinedStr
+            | ast.FormattedValue
+            | ast.BinOp
+            | ast.Add
+            | ast.Div
+            | ast.Load,
+        ):
+            return None
+    return stmt.targets[0].id
+
+
+def _without_read_lines(text: str, bindings: bool = True) -> str:
+    """Code où chaque ligne prouvée en lecture seule ne garde que ce qui n'est pas lu ou affiché.
 
     Un script peut lire le journal et écrire ailleurs (CAP-9) : le nom protégé n'est retenu que
-    sur les lignes qui peuvent écrire. Repli prudent : une ligne que l'AST ne prouve pas en lecture
-    (affectation du nom, `open` sur plusieurs lignes, mode variable, `:=`) reste comptée.
+    là où il peut servir à écrire. Un nom lié au chemin (`j = "journal.jsonl"`) n'est oublié que
+    si chacun de ses autres emplois est l'argument d'une lecture ou d'un `print`. Repli prudent :
+    une ligne que l'AST ne prouve pas en lecture (`open` sur plusieurs lignes, mode variable,
+    appel hors liste) reste comptée, et aucune ligne n'est allégée si le texte accède au nom
+    du fichier ouvert (`f.name`), aux noms dynamiquement (`globals()`) ou redéfinit `open`,
+    `print` ou `Path`. Un fragment (`Edit`) ne montre pas tout le fichier : `bindings` faux, ses
+    liaisons restent comptées, comme une liaison sans autre emploi dans le texte.
     """
-    kept = []
-    for line in text.split("\n"):
-        if not _WRITE_VERB.search(normalize(line)) and _line_only_reads(line):
+    lines = text.split("\n")
+    if _NO_EXEMPTION.search(text) or _SHADOWING.search(text):
+        return text
+    rests = [
+        None if _WRITE_VERB.search(normalize(line)) else _read_line_rest(line) for line in lines
+    ]
+    kept = [line if rest is None else rest for line, rest in zip(lines, rests, strict=True)]
+    for i, line in enumerate(lines):
+        # Seules les liaisons d'un nom protégé comptent : O(liaisons protégées × lignes).
+        if rests[i] is not None or not bindings or not _mentions_protected(normalize(line), False):
             continue
-        kept.append(line)
+        name = _path_binding(line)
+        if name is None or _WRITE_VERB.search(normalize(line)):
+            continue
+        uses = re.compile(rf"\b{re.escape(name)}\b")
+        if not bindings or not any(uses.search(o) for j, o in enumerate(lines) if j != i):
+            continue
+        if all(
+            not uses.search(other)
+            or (
+                not _WRITE_VERB.search(normalize(other))
+                and (rest := _read_line_rest(other, need_read=False)) is not None
+                and not uses.search(rest)
+            )
+            for j, other in enumerate(lines)
+            if j != i
+        ):
+            kept[i] = ""
     return "\n".join(kept)
 
 
@@ -603,7 +738,9 @@ def _check_code(text: str, tool: str, shell: bool) -> list[tuple[str, str]]:
         found.append(("lecture-interdite", reason))
     if _WRITE_VERB.search(stripped) or _open_writes(text):
         if not shell:
-            stripped = _HARMLESS_REDIRECT.sub(" ", normalize(_without_read_lines(text)))
+            stripped = _HARMLESS_REDIRECT.sub(
+                " ", normalize(_without_read_lines(text, tool not in _FRAGMENT_TOOLS))
+            )
         target = _mentions_protected(stripped, shell)
         if target:
             found.append(("etat-seance", f"écriture visant « {target} »"))

@@ -146,7 +146,8 @@ def test_script_reading_the_journal_and_writing_elsewhere_is_clean(tmp_path):
         READ_JOURNAL_WRITE_WORK + 'open("sessions/s1/journal.jsonl", "a").write("{}")\n',
         'rows = open("sessions/s1/journal.jsonl").read()\n'
         'open("sessions/s1/journal.jsonl", "w").write(rows)\n',
-        'p = "sessions/s1/journal.jsonl"\nrows = open(p).read()\nopen("work/x", "w").write(rows)\n',
+        'p = "sessions/s1/journal.jsonl"\nrows = open(p).read()\nopen(p, "w").write(rows)\n',
+        'p = "sessions/s1/journal.jsonl"\nrows = open(p).read()\nq = p\nopen(q, "w").write(rows)\n',
         'open(\n    "sessions/s1/state.json",\n    "w",\n)\n',
     ],
 )

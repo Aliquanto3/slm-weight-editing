@@ -589,6 +589,88 @@ def test_writing_protected_names_stays_flagged(code):
     assert "etat-seance" in {r for r, _ in found}, found
 
 
+# CAP-9 (revue passe 3) : scripts d'analyse typiques de l'éditeur, qui lisent l'état de la séance
+# et écrivent dans work/ ou notes/. Le crochet PreToolUse les applique en direct : un faux refus
+# bloque l'éditeur en `dontAsk`.
+J = "sessions/s1/journal.jsonl"
+LEGIT_ANALYSIS_SCRIPTS = [
+    f'import json\nfrom pathlib import Path\nj = "{J}"\n'
+    "rows = [json.loads(l) for l in Path(j).read_text().splitlines()]\n"
+    'Path("work/n.json").write_text(json.dumps(rows))\n',
+    "import json\nfrom pathlib import Path\n"
+    's = json.loads(Path("sessions/s1/state.json").read_text())\n'
+    'Path("notes/etat.md").write_text(str(s))\n',
+    f'import json\nrows = [json.loads(l) for l in open("{J}")]\n'
+    'open("work/out.txt", "w").write(str(len(rows)))\n',
+    f'import json\nwith open("{J}", encoding="utf-8") as f:\n'
+    "    rows = [json.loads(x) for x in f]\n"
+    'with open("work/out.json", "w") as g:\n    json.dump(rows, g)\n',
+    f'import json\nout = []\nfor line in open("{J}"):\n    out.append(json.loads(line))\n'
+    'with open("notes/n.txt", "w", encoding="utf-8") as g:\n    g.write(str(out))\n',
+    f'import pandas as pd\nfrom pathlib import Path\ndf = pd.read_json("{J}", lines=True)\n'
+    'Path("work/journal.csv").write_text(df.to_csv())\n',
+    'import numpy as np\na = np.load("probes/3/resid_l5.npy", mmap_mode="r")\n'
+    'np.save("work/mean.npy", a.mean(0))\nprint(open("sessions/s1/state.json").read())\n'
+    'open("work/x.txt", "w").write("ok")\n',
+    f'n = sum(1 for _ in open("{J}"))\nopen("work/n.txt", "w").write(str(n))\n',
+    'import json\ndata = json.load(open("workspace.json"))\n'
+    'with open("work/w.txt", "w") as f:\n    f.write(data["model"])\n',
+    f'import json\nj = "{J}"\nrows = [json.loads(l) for l in open(j)]\n'
+    'print(f"{len(rows)} appels dans {j}")\nopen("work/r.txt", "w").write(f"{len(rows)}\\n")\n',
+    'import json\nprint(json.load(open("sessions/s1/state.json"))["budget"])\n'
+    f'print(json.dumps(json.loads(open("{J}").readline()), indent=2))\n'
+    'with open("work/x.txt", "w") as f:\n    f.write("ok")\n',
+    f'import json\nfrom pathlib import Path\nJ = Path("{J}")\n'
+    "rows = [json.loads(l) for l in J.read_text().splitlines()]\n"
+    'Path("work/a.txt").write_text(str(rows))\n',
+    f'import json\nfor i, line in enumerate(open("{J}", encoding="utf-8")):\n'
+    '    print(i, json.loads(line)["kind"])\nopen("work/a.txt", "w").write("x")\n',
+    f'p = "{J}"\nrows = open(p).read()\nopen("work/x", "w").write(rows)\n',
+]
+
+
+@pytest.mark.parametrize("code", LEGIT_ANALYSIS_SCRIPTS)
+def test_legit_analysis_scripts_are_not_refused(code, ws):
+    assert audit.check_code_content(code, "run-script") == []
+    assert audit.check_code_content(code, "Write") == []
+    tool_input = {"file_path": str(ws / "scripts" / "analyse.py"), "content": code}
+    assert hook.decide(payload("Write", tool_input, ws), hook.context(ws)) is None
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        # Chemin lu porté hors de la lecture (élément, `append`) puis écrit.
+        f'from pathlib import Path\nx = [(Path("{J}"), l) for l in open("{J}")]\n'
+        'open(x[0][0], "w")\n',
+        "from pathlib import Path\npaths = []\n"
+        f'paths.append((Path("{J}"), Path("{J}").read_text()))\n'
+        'open(paths[0][0], "w")\n',
+        # Nom du fichier ouvert (`f.name`) ou fonction homonyme d'une lecture.
+        f'with open("{J}") as f:\n    pass\nopen(f.name, "w")\n',
+        f'def load(p):\n    return open(p, "w")\nrows = load(open("{J}").name)\n',
+        # Liaison du chemin : emploi hors lecture, redéfinition de `print`, accès dynamique.
+        f'j = "{J}"\nprint(open(j).read())\nk = j\nopen(k, "w")\n',
+        f'import os\nj = "{J}"\nprint = lambda p: os.link(p, "n")\nprint(j)\nopen("work/x", "w")\n',
+        f'j = "{J}"\nprint(open(j).read())\nopen(globals()["j"], "w")\n',
+        # Méthode de lecture remplacée, import étoilé.
+        'import os\nfrom pathlib import Path\nPath.read_text = lambda s: os.link(str(s), "n")\n'
+        f'print(Path("{J}").read_text())\nopen("work/x", "w")\n',
+        f'from evil import *\nprint(open("{J}").read())\nopen("work/x", "w")\n',
+    ],
+)
+def test_read_exemption_leaks_stay_flagged(code):
+    found = audit.check_code_content(code, "run-script")
+    assert "etat-seance" in {r for r, _ in found}, found
+
+
+def test_edit_fragment_binding_stays_flagged():
+    # Un fragment ne montre pas le reste du fichier : la liaison du chemin y reste comptée.
+    fragment = f'j = "{J}"\nprint(open(j).read())\nopen("work/x", "w")\n'
+    assert audit.check_code_content(fragment, "run-script") == []
+    assert "etat-seance" in {r for r, _ in audit.check_code_content(fragment, "Edit")}
+
+
 def test_reading_claude_dir_inside_workspace_only():
     inside = audit.check_tool_use("Read", {"file_path": f"{WS}/.claude/settings.json"}, CTX_S1)
     assert inside == []
