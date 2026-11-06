@@ -307,7 +307,7 @@ def test_hand_edited_state_cannot_reset_probe_count(ws):
 
 def test_too_many_texts_refused_with_ceiling_and_value(ws):
     path = write_texts(ws, ["deux"] * 65)
-    with pytest.raises(HarnessError, match="plafond de 64 textes par appel"):
+    with pytest.raises(HarnessError, match="plafond de 64 textes par appel : 65 demandés"):
         call(ws, path)
     assert [e["event"] for e in journal(ws)] == ["open"]
 
@@ -640,3 +640,36 @@ def test_audit_accepts_consigne_probe_command(ws):
     assert audit.check_shell(command, ctx) == []
     full = line.replace("[", "").replace("]", "")
     assert audit.check_shell(full, ctx) == []
+
+
+def test_texts_with_utf8_bom_accepted(ws):
+    path = ws / "notes" / "bom.jsonl"
+    path.write_bytes(
+        b"\xef\xbb\xbf" + "".join(json.dumps({"text": t}) + "\n" for t in TEXTS).encode()
+    )
+    assert call(ws, path, capture=["final_norm"], positions="last")["tokens"] == 10
+
+
+def test_logits_never_materialised_for_all_positions(ws, monkeypatch):
+    # Revue passe 1 : jamais [jetons, vocabulaire] d'un coup ; blocs de 4 positions au plus.
+    monkeypatch.setattr(probe, "LOGIT_CHUNK", 4)
+    sizes, keeps = [], []
+    real = LlamaForCausalLM.forward
+
+    def spy(self, *args, **kwargs):
+        keeps.append(kwargs.get("logits_to_keep"))
+        out = real(self, *args, **kwargs)
+        sizes.append(out.logits.shape[1])
+        return out
+
+    monkeypatch.setattr(LlamaForCausalLM, "forward", spy)
+    call(ws, capture=["final_norm"], positions="all", token_ids=[7, 9])
+    assert keeps == [1, 1] and sizes == [1, 1]
+    monkeypatch.undo()
+    ref = reference(session(ws) / "work", TEXTS)
+    out = ws / "probes" / "1"
+    want = torch.from_numpy(np.concatenate([r["logits"] for r in ref]))
+    top = torch.topk(want, len(WORDS), dim=-1)
+    assert np.array_equal(np.load(out / "top_logit_values.npy"), top.values.numpy())
+    assert np.array_equal(np.load(out / "top_logit_ids.npy"), top.indices.numpy())
+    assert np.array_equal(np.load(out / "token_logits.npy"), want[:, [7, 9]].numpy())

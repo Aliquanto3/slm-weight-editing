@@ -92,3 +92,17 @@ Fait : `probe.py` (commande, plafonds, estimation, crochets, captures `.npy` en 
 - Texte lu avec `add_special_tokens=False` (l'éditeur écrit lui-même le gabarit) ; `--device` (auto par défaut) ajouté comme `run-batch`.
 - `journal` : `probe` porte aussi le sha256 de chaque `.npy` (`output_files`).
 - Non fait (reporté) : `token_ids` en entrée, `--chat`, `torch.set_num_threads`.
+
+## Revue
+
+### Passe 1 (2026-11-06, SHA revu 1574b9a)
+
+Base : `feat/probe` (b84596f) fusionnée avec `origin/main` (docs seulement), sans rebase (story 2.5 empilée).
+
+- Important · medium · second avis 1 · corrigé : `model(...).logits[0].float()` matérialisait [jetons, vocabulaire] en bf16 puis float32 (8 192 x 248 320 : 4 + 8 Go) même avec `--positions last`, OOM après `probe_reserve` donc budget perdu. Forward en `logits_to_keep=1`, logits recalculées par blocs de `LOGIT_CHUNK` = 256 positions depuis la sortie de la norme finale par `get_output_embeddings()`, garde d'égalité exacte avec la logit de la dernière position rendue par le forward (refus si le modèle post-traite ses logits). Test `test_logits_never_materialised_for_all_positions` (blocs de 4, égalité à la référence).
+- Important · low · second avis 2 · corrigé : le refus de plus de 64 textes ne donnait pas le nombre demandé (critère 3) ; compte complet puis message « 65 demandés », test réaligné.
+- Nit · low · second avis 3 · corrigé : `--texts` lu en `utf-8-sig` (BOM de PowerShell 5 toléré), test ajouté.
+- Nit · low · second avis 4 · rejeté : les crochets de la ligne `probe` de `CONSIGNE.md` suivent la convention déjà en place pour `run-batch` (`[--start N]`) ; `CLAUDE.md` donne la forme recopiable sans crochets et `test_audit_accepts_consigne_probe_command` vérifie les deux formes.
+- Nit · low · second avis 5 · rejeté : écart consigné et motivé (budget dans la ligne `open`, somme des `probe_reserve` d'un journal non inscriptible par l'éditeur ; aucun compteur `state.json` à recouper).
+- Complexité : 0 constat (journal relu deux fois par appel, O(n) ; offsets O(textes²) sur 64 textes au plus).
+- Report (GPU/modèle réel) : vérifier sur Qwen3.5 en CUDA que la garde d'égalité de la dernière logit tient (lm_head sans post-traitement, même noyau pour 1 ligne) et mesurer la mémoire crête d'une probe de 8 192 jetons en `--positions all`.

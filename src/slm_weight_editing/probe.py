@@ -25,6 +25,7 @@ MAX_TEXTS = 64
 MAX_TEXT_TOKENS = 8192
 MAX_OUTPUT_BYTES = 2 * 1000**3
 TOP_K = 20
+LOGIT_CHUNK = 256  # positions dont les logits sont calculées ensemble (256 x 248 320 x 4 o)
 CAPTURES = ("resid", "mlp_act", "attn_out", "final_norm")
 DEFAULT_PROBE_BUDGET = 2_000_000
 DEFAULT_PROBE_DISK_MAX = 20 * 1000**3
@@ -125,7 +126,7 @@ def estimate_output_bytes(
 def read_texts(path: Path) -> list[str]:
     """Fichier JSONL : une ligne `{"text": "..."}` par texte (au plus 64)."""
     try:
-        raw = path.read_text("utf-8")
+        raw = path.read_text("utf-8-sig")  # BOM toléré (PowerShell 5)
     except OSError as exc:
         raise HarnessError(f"--texts illisible : {path} ({exc})", 1) from exc
     texts = []
@@ -143,8 +144,8 @@ def read_texts(path: Path) -> list[str]:
                 'attendu {"text": "texte non vide"} seulement'
             )
         texts.append(row["text"])
-        if len(texts) > MAX_TEXTS:
-            raise HarnessError(f"plafond de {MAX_TEXTS} textes par appel : plus demandés")
+    if len(texts) > MAX_TEXTS:
+        raise HarnessError(f"plafond de {MAX_TEXTS} textes par appel : {len(texts)} demandés")
     if not texts:
         raise HarnessError(f"--texts {path.name} ne contient aucun texte")
     return texts
@@ -260,24 +261,46 @@ def _forward_all(
     dtype_name = None
     offset = 0
     fv_offset = 0
+    # Logits par blocs de positions depuis la sortie de la norme finale : le forward ne garde que
+    # la dernière position (`logits_to_keep=1`), jamais [jetons, vocabulaire] en entier
+    # (8 192 x 248 320 en float32 = 8 Go).
+    head = model.get_output_embeddings()
+    final: dict[str, torch.Tensor] = {}
+    hooks.append(norm.register_forward_hook(lambda m, a, o: final.__setitem__("h", _first(o))))
+
+    def logits_of(positions: list[int]) -> torch.Tensor:
+        index = torch.tensor(positions, dtype=torch.long, device=device)
+        return head(final["h"][0, index]).float()
+
     try:
         with torch.inference_mode():
             for ids, selected in zip(id_lists, row_sets, strict=True):
                 seen.clear()
+                final.clear()
                 tensor = torch.tensor([ids], dtype=torch.long, device=device)
-                logits = model(input_ids=tensor).logits[0].float()
+                last = model(input_ids=tensor, logits_to_keep=1).logits[0, -1].float()
                 dtype_name = str(model.dtype)
-                idx = torch.tensor(selected, dtype=torch.long, device=device)
-                top = torch.topk(logits[idx], top_ids.shape[1], dim=-1)
-                top_ids[offset : offset + len(selected)] = top.indices.cpu().numpy()
-                top_vals[offset : offset + len(selected)] = top.values.cpu().numpy()
-                if tok_logits is not None:
-                    chosen = logits[idx][:, token_ids]
-                    tok_logits[offset : offset + len(selected)] = chosen.cpu().numpy()
+                if not torch.equal(logits_of([len(ids) - 1])[0], last):
+                    raise HarnessError(
+                        "logits du modèle non reproductibles depuis la norme finale "
+                        "(post-traitement après lm_head) : modèle non pris en charge par probe",
+                        1,
+                    )
+                for start in range(0, len(selected), LOGIT_CHUNK):
+                    part = selected[start : start + LOGIT_CHUNK]
+                    logits = logits_of(part)
+                    row = offset + start
+                    top = torch.topk(logits, top_ids.shape[1], dim=-1)
+                    top_ids[row : row + len(part)] = top.indices.cpu().numpy()
+                    top_vals[row : row + len(part)] = top.values.cpu().numpy()
+                    if tok_logits is not None:
+                        tok_logits[row : row + len(part)] = logits[:, token_ids].cpu().numpy()
+                    del logits, top
                 if fv is not None:
                     for position in full_vocab:
-                        fv[fv_offset] = logits[position].cpu().numpy()
+                        fv[fv_offset] = logits_of([position])[0].cpu().numpy()
                         fv_offset += 1
+                idx = torch.tensor(selected, dtype=torch.long, device=device)
                 for name, value in seen.items():
                     array = value[0, idx].float().cpu().numpy()
                     if name not in maps:
