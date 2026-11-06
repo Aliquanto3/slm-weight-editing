@@ -64,7 +64,7 @@ RULES = {
 
 # Voie permise de chaque règle (story 2.5, CAP-6) : un refus vu par l'éditeur dit la règle et ce
 # qu'il peut faire à la place. Liste fermée : mêmes clés que RULES (test).
-_COMMANDS = "run-batch, session-status, run-script, probe"
+_COMMANDS = "run-batch, session-status, run-script, probe, detach-lm-head"
 _NOTE = "note le besoin dans notes/BLOCAGES.md"
 ALLOWED_WAYS = {
     "transcription": "rien à faire côté éditeur (audit d'Anaël)",
@@ -104,7 +104,7 @@ def refusal_message(rule: str, detail: str) -> str:
     return f"{rule} : {detail} ; permis : {ALLOWED_WAYS[rule]}"
 
 
-ALLOWED_SUBCOMMANDS = ("run-batch", "session-status", "run-script", "probe")
+ALLOWED_SUBCOMMANDS = ("run-batch", "session-status", "run-script", "probe", "detach-lm-head")
 # Aucun module du harnais n'est importable par l'éditeur (run-script les refuse aussi).
 ALLOWED_INTERNAL_MODULES: tuple[str, ...] = ()
 # Outils de séance ; tout autre outil (WebFetch, WebSearch, Agent, Skill, mcp__*...) échoue.

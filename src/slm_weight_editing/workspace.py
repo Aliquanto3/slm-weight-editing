@@ -1,6 +1,6 @@
 """Espace de séance hors du dépôt (story 5, CAP-6), créé par Anaël : `session-workspace`.
 
-`<out>/` reçoit `.claude/settings.json` (dontAsk, liste blanche de quatre commandes, lectures et
+`<out>/` reçoit `.claude/settings.json` (dontAsk, liste blanche de cinq commandes, lectures et
 écritures bloquées hors de l'espace), `CLAUDE.md`, `CONSIGNE.md`, `scripts/`, `data/` (copie des
 fichiers train) et `sessions/` (dossier des séances du harnais, avec `<id>/work/`). Le chemin du
 dépôt n'est écrit qu'ici, à la création, hors du dépôt. L'agent éditeur lancé dans `<out>/` ne
@@ -54,7 +54,7 @@ LAUNCH_COMMAND = (
     "--tools Read,Grep,Glob,Edit,Write,Bash,PowerShell,TodoWrite --disable-slash-commands"
 )
 TEMPLATES = Path(__file__).with_name("seance")
-ALLOWED_SUBCOMMANDS = ("run-batch", "session-status", "run-script", "probe")
+ALLOWED_SUBCOMMANDS = ("run-batch", "session-status", "run-script", "probe", "detach-lm-head")
 # Commandes lues ou exécutées sans règle en mode dontAsk (lecture seule) ou génériques : refusées.
 DENIED_COMMANDS = (
     "cat head tail less more grep egrep fgrep rg find ls dir tree type file stat wc du df od xxd "
@@ -165,7 +165,7 @@ CUDA_EXTRA = " --extra cuda"
 
 
 def allowed_commands(repo: Path, cuda: bool = False) -> list[str]:
-    """Préfixes exacts des quatre commandes de l'éditeur (forme vérifiée par l'audit).
+    """Préfixes exacts des cinq commandes de l'éditeur (forme vérifiée par l'audit).
 
     Le dépôt n'y figure pas : `env.UV_PROJECT` des réglages le fixe (un chemin hors de l'espace
     cité par `--project` est refusé en `dontAsk` avec `blockReadsOutsideWorkingDirectories`).
