@@ -1,6 +1,6 @@
 # Statuts des epics 1 (spec-slm-weight-editing) et 2 (spec-harnais-v2) ; id N de stories.yaml = story E.N. Mis à jour par l orchestrateur du run.
 generated: 2026-11-04 08:48
-last_updated: 2026-11-05 23:00
+last_updated: 2026-11-06 07:06
 project: slm-weight-editing
 tracking_system: file-system
 story_location: _bmad-output/specs/spec-slm-weight-editing
@@ -22,3 +22,93 @@ development_status:
   2-6-audit-faux-positifs-decodage: done
   2-7-essai-ollama-output-weight: done
   2-8-lm-head-detache: done
+  epic-2-retrospective: done
+action_items:
+  - id: "epic-2-retro-item-1-a-1-stabiliser-test_probe-référence-de-m"
+    epic: 2
+    action: "A-1 Stabiliser test_probe (référence de même forme de matmul, ou tolérance
+      1 ulp décidée par Anaël et écrite dans CAP-1)"
+    owner: "dev-story + Anaël"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-11-06.md"
+  - id: "epic-2-retro-item-2-a-2-relire-3c154c2-repli-de-hook_python"
+    epic: 2
+    action: "A-2 Relire 3c154c2 (repli de hook_python) et trancher contre l amendement
+      6 de la fiche 2.5"
+    owner: "orchestrateur puis Anaël"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-11-06.md"
+  - id: "epic-2-retro-item-3-a-3-liste-de-contrôle-posix-dans-le-prom"
+    epic: 2
+    action: "A-3 Liste de contrôle POSIX dans le prompt de dev-story (lien du venv,
+      realpath macOS, mmap Linux, déterminisme BLAS)"
+    owner: "orchestrateur"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-11-06.md"
+  - id: "epic-2-retro-item-4-a-4-ne-lancer-une-passe-de-revue-qu-avec"
+    epic: 2
+    action: "A-4 Ne lancer une passe de revue qu avec l état de la CI de la branche
+      ; CI rouge corrigée d abord"
+    owner: "orchestrateur"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-11-06.md"
+  - id: "epic-2-retro-item-5-a-5-story-à-risque-pour-toute-story-qui"
+    epic: 2
+    action: "A-5 Story à risque pour toute story qui touche réglages, crochet ou audit
+      : fiche relue, dev Opus, batterie de cas dans la fiche"
+    owner: "orchestrateur"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-11-06.md"
+  - id: "epic-2-retro-item-6-a-6-fiche-d-une-story-à-état-persistant"
+    epic: 2
+    action: "A-6 Fiche d une story à état persistant : reprise après interruption
+      fixée avant le code"
+    owner: "rédacteur des fiches"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-11-06.md"
+  - id: "epic-2-retro-item-7-a-7-release-seulement-après-ci-verte-de"
+    epic: 2
+    action: "A-7 Release seulement après CI verte de main sur le commit tagué"
+    owner: "orchestrateur"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-11-06.md"
+  - id: "epic-2-retro-item-8-a-8-rejouer-l-audit-sur-la-transcription"
+    epic: 2
+    action: "A-8 Rejouer l audit sur la transcription s1 (CAP-9) avant s2 et l ajouter
+      aux limites de la release v0.2.0"
+    owner: "Anaël + orchestrateur"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-11-06.md"
+  - id: "epic-2-retro-item-9-a-9-relire-les-20-décisions-des-fiches-p"
+    epic: 2
+    action: "A-9 Relire les 20 décisions des fiches (priorité 2.8 d3, 2.5 d5, 2.6
+      d1) ; mentionner le seuil CAP-10 déplacé après mesure dans le rapport s2"
+    owner: "Anaël"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-11-06.md"
+  - id: "epic-2-retro-item-10-a-10-levée-de-point-d-arrêt-ne-délègue-p"
+    epic: 2
+    action: "A-10 Levée de point d arrêt ne délègue pas les questions de protocole
+      : decisions-a-confirmer.md validé par Anaël avant fusion"
+    owner: "orchestrateur"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-11-06.md"
+  - id: "epic-2-retro-item-11-a-11-sortir-l-exemption-de-lecture-ast-e"
+    epic: 2
+    action: "A-11 Sortir l exemption de lecture AST et les voies permises d audit_transcript.py"
+    owner: "story de refonte"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-11-06.md"
+  - id: "epic-2-retro-item-12-a-12-passer-bmad-review-sur-d4fa5ab-9204"
+    epic: 2
+    action: "A-12 Passer bmad-review sur d4fa5ab..9204b55, frontières 2.5/2.6 et 2.5/2.8"
+    owner: "orchestrateur"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-11-06.md"
+  - id: "epic-2-retro-item-13-a-13-journaliser-chaque-ci-rouge-et-pass"
+    epic: 2
+    action: "A-13 Journaliser chaque CI rouge et passer le status des fiches harnais
+      v2 à done"
+    owner: "orchestrateur"
+    status: open
+    ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-11-06.md"
