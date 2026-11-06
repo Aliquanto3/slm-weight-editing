@@ -97,3 +97,27 @@ Anaël a levé ses points d'arrêt de relecture le 2026-11-06 (« Retire mes poi
 3. Lancement documenté de la séance avec `claude --setting-sources project,local` (réglages utilisateur exclus, donc crochets et mods personnels exclus), plus une vérification `/hooks` à la main au départ, inscrite dans OPERATEUR.md. Le test vérifie que la commande de lancement rendue contient l'option.
 4. Tout l'espace est lisible par les scripts, y compris `.claude/settings.json`, `workspace.json`, `sessions/<id>/scripts/` et `freeze/`. `heldout/` et le dépôt restent hors de portée.
 5. `notes/BLOCAGES.md` est publié avec le gel, comme le journal public.
+
+## Amendements de la relecture Opus (2026-11-06, font foi sur ce qui précède)
+
+Lignes citées sur main@34b20e7.
+
+**High**
+1. **Audit aligné sur la lecture libre** (`audit_transcript.py` ajouté aux fichiers touchés). Aujourd'hui `open("sessions/s1/journal.jsonl")` ou `open("workspace.json")` rend `etat-seance` (`_WRITE_VERB`, vers l. 140) et un Read de `<ws>/.claude/settings.json` rend `lecture-interdite` (`_SEGMENTS`, l. 96). Critères : un `open` en lecture d'un nom protégé et un Read de `.claude/**` dans l'espace ne sont pas signalés ; `open(..., "w"/"a"/"x"/"+")`, `write_text`, `json.dump` vers ces noms restent `etat-seance`. Les 73 SCENARIOS restent en échec.
+2. **Le crochet réutilise l'audit, il ne recopie pas les deny.** `.venv/Lib/site-packages/slm_weight_editing.pth` pointe vers `src`, et `.venv/Scripts/python.exe -I -B -c "import slm_weight_editing.audit_transcript"` marche en 0,09 s (bibliothèque standard seule). Le crochet appelle `audit_transcript.check_tool_use` avec un `Context` lu dans `workspace.json`, plus une table règle → voie permise. Test : pour chaque SCENARIO et chaque contournement, le crochet refuse si et seulement si l'audit signale une violation.
+3. **Lancement de séance** (remplace la décision 3) : `claude --strict-mcp-config --setting-sources project --tools Read,Grep,Glob,Edit,Write,Bash,PowerShell,TodoWrite --disable-slash-commands` (`--setting-sources` ne dit rien des plugins, skills, `~/.claude/CLAUDE.md`, mémoire ni connecteurs claude.ai ; `--bare` et `--safe-mode` coupent les crochets de l'espace, donc exclus). La vérification « aucun mod installé » est gardée. OPERATEUR.md porte une liste de contrôle `/hooks`, `/memory`, `/mcp`, `/plugin` avec le résultat attendu pour chacune. Le test vérifie chaque option dans la commande rendue.
+4. **Canonicalisation des chemins dans le crochet et l'audit** (`_in_workspace`, l. 478, est textuel). Racine de l'espace passée en argument du crochet, pas tirée du `cwd` reçu ; chemin relatif résolu sur le `cwd` reçu, puis `os.path.realpath` et `os.path.normcase` ; refus de `\?\`, `\.\`, UNC, noms 8.3 (`~`) et flux (`:` hors lecteur). Test : Read à travers une jonction posée dans l'espace vers le dépôt → `deny`.
+
+**Medium**
+5. **Liste fermée des appels permis** (critère 4), paramétrée : les commandes de `allowed_commands()` sous Bash et PowerShell, avec et sans cuda, plus `probe` ; Read, Grep, Glob sur chaque fichier de l'espace, dont `.claude/settings.json`, `workspace.json`, `sessions/<id>/journal.jsonl` ; Edit sur chaque chemin permis. Aucun n'est refusé par le crochet. Stdin malformé ou exception : code 0 sans sortie, jamais `allow` ni `ask`.
+6. **Schéma du crochet** : bloc `hooks.PreToolUse` (`matcher`, `type: "command"`, commande en forme exec — vérifier le nom de clé dans la doc Claude Code —, `timeout` 10 s) ; sortie `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": …}}`, code 0. `create_workspace` refuse si `<dépôt>/.venv/Scripts/python.exe` (ou `bin/python` hors Windows) est absent ; ce chemin passe `_SAFE_PATH` (workspace.py l. 80).
+7. **Deny d'OPERATEUR.md** : `posix()` (workspace.py l. 87) rend `C:/Users/…` alors que la règle attend `//c/Users/…` ; ajouter le helper et la règle `Read(//c/…/models/operateur/**)`. Refus d'écraser un `<id>.md` existant. Ajouter `operateur` à `_FORBIDDEN_COMPACT` (audit l. 84). Le blocage réel par `blockReads…` se vérifie à l'essai à blanc, pas en pytest.
+8. **`freeze.py` ajouté aux fichiers touchés** : copie de `notes/BLOCAGES.md` dans `<séance>/freeze/` (vers l. 240), sha256 au manifeste, test.
+9. **Critère 3 testable** : liste fermée d'identifiants de règle partagée avec `RULES` de l'audit (l. 50) et un helper de message. Voie permise obligatoire pour les refus vus par l'éditeur : `run-batch`, `session-status`, `run-script`, `probe`. Les refus muets des seuls deny (crochet en échec) en sont exemptés.
+10. **Balayage de l'espace dans `audit-session`** : avec la lecture étendue à tout l'espace (script_runner.py l. 215-216, _sandbox.py l. 192-193), tout point d'analyse (jonction, lien symbolique) ou lien dur (`st_nlink > 1`) dans l'espace donne une violation `lien`.
+
+**Low**
+11. Les 28 cas de `REASONS` (tests/test_session_workspace.py l. 397-428) ne lisent pas dans l'espace (vérifié). Ajouter des cas lanceur positifs : lecture via `\?\C:\…\dépôt`, via `\localhost\c$\…`, via une jonction, et écriture de `Workspace.JSON.`.
+12. Le crochet compare en minuscules (`normalize`, audit l. 188), pour que le motif soit donné quelle que soit la casse (`HELDOUT`, `Workspace.json`).
+
+Si le crochet réutilise l'audit (2), les points 4 et 12 sont des corrections de l'audit lui-même et protègent aussi la troisième couche : traiter 1, 2 et 4 ensemble.
