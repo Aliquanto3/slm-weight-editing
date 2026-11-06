@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import sys
@@ -122,18 +123,27 @@ def rule_path(path: Path) -> str:
     return "/" + text
 
 
+def _in_ci() -> bool:
+    return any(
+        os.environ.get(name, "").strip().lower() not in ("", "false", "0")
+        for name in ("CI", "GITHUB_ACTIONS")
+    )
+
+
 def hook_python(repo: Path) -> Path:
     """Interpréteur qui lance le crochet en forme exec (sans shell).
 
-    Celui du `.venv` du dépôt, sinon celui de l'environnement virtuel qui fait tourner le harnais
-    (`uv run` hors `.venv` local, CI). Chemin absolu jamais résolu : sous POSIX, `bin/python` est un
-    lien vers l'interpréteur de base, qui perdrait les `site-packages` (et le `.pth` du dépôt).
+    Celui du `.venv` du dépôt. Le repli sur l'environnement virtuel qui fait tourner le harnais
+    n'a lieu qu'en CI (variable `CI` ou `GITHUB_ACTIONS` posée, ni vide ni `false`/`0`) : hors CI,
+    sans `.venv` local, le chemin local absent est rendu et `create_workspace` refuse (amendement 6
+    de la story 2.5). Chemin absolu jamais résolu : sous POSIX, `bin/python` est un lien vers
+    l'interpréteur de base, qui perdrait les `site-packages` (et le `.pth` du dépôt).
     """
     rel = Path("Scripts", "python.exe") if sys.platform == "win32" else Path("bin", "python")
     local = (repo / ".venv" / rel).absolute()
     if local.is_file():
         return local
-    if sys.prefix != sys.base_prefix and (Path(sys.prefix) / rel).is_file():
+    if _in_ci() and sys.prefix != sys.base_prefix and (Path(sys.prefix) / rel).is_file():
         return (Path(sys.prefix) / rel).absolute()
     return local
 

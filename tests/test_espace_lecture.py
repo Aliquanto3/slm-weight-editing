@@ -383,22 +383,73 @@ def test_settings_hook_block(ws):
     }
 
 
-def test_hook_python_falls_back_to_running_venv(tmp_path, monkeypatch):
-    """Sans `.venv` dans le dépôt (CI) : environnement virtuel courant, chemin non résolu."""
+def _fake_running_venv(tmp_path, monkeypatch) -> Path:
     monkeypatch.setattr(sys, "prefix", str(tmp_path / "venv"))
     monkeypatch.setattr(sys, "base_prefix", str(tmp_path / "base"))
-    rel = ("Scripts", "python.exe") if sys.platform == "win32" else ("bin", "python")
-    exe = tmp_path.joinpath("venv", *rel)
+    exe = tmp_path.joinpath("venv", *_VENV_REL)
     exe.parent.mkdir(parents=True)
     exe.write_bytes(b"")
+    return exe
+
+
+_VENV_REL = ("Scripts", "python.exe") if sys.platform == "win32" else ("bin", "python")
+
+
+@pytest.mark.parametrize("name", ["CI", "GITHUB_ACTIONS"])
+def test_hook_python_falls_back_to_running_venv_in_ci(tmp_path, monkeypatch, name):
+    """Sans `.venv` dans le dépôt, en CI : environnement virtuel courant, chemin non résolu."""
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setenv(name, "true")
+    exe = _fake_running_venv(tmp_path, monkeypatch)
     assert workspace.hook_python(tmp_path / "depot") == exe.absolute()
-    local = tmp_path.joinpath("depot", ".venv", *rel)
+
+
+@pytest.mark.parametrize("value", ["", "false", "0", "False"])
+def test_hook_python_no_fallback_when_ci_flag_is_off(tmp_path, monkeypatch, value):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setenv("CI", value)
+    _fake_running_venv(tmp_path, monkeypatch)
+    depot = tmp_path / "depot"
+    assert workspace.hook_python(depot) == depot.joinpath(".venv", *_VENV_REL).absolute()
+
+
+def test_hook_python_no_fallback_outside_ci(tmp_path, monkeypatch):
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    _fake_running_venv(tmp_path, monkeypatch)
+    depot = tmp_path / "depot"
+    got = workspace.hook_python(depot)
+    assert got == depot.joinpath(".venv", *_VENV_REL).absolute()
+    assert not got.exists()
+
+
+def test_workspace_refused_outside_ci_with_running_venv(tmp_path, base, monkeypatch):
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    _fake_running_venv(tmp_path, monkeypatch)
+    repo = tmp_path / "a" / "GitHub" / "depot"
+    (repo / "src" / "slm_weight_editing").mkdir(parents=True)
+    with pytest.raises(workspace.WorkspaceError, match="interpréteur du crochet introuvable"):
+        workspace.create_workspace(tmp_path / "ws", "s1", 10, base, [_data(tmp_path)], repo=repo)
+
+
+@pytest.mark.parametrize("ci", [None, "true"])
+def test_hook_python_local_venv_always_wins(tmp_path, monkeypatch, ci):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    if ci:
+        monkeypatch.setenv("CI", ci)
+    else:
+        monkeypatch.delenv("CI", raising=False)
+    _fake_running_venv(tmp_path, monkeypatch)
+    local = tmp_path.joinpath("depot", ".venv", *_VENV_REL)
     local.parent.mkdir(parents=True)
     local.write_bytes(b"")
     assert workspace.hook_python(tmp_path / "depot") == local.absolute()
 
 
 def test_workspace_refused_without_hook_interpreter(tmp_path, base, monkeypatch):
+    monkeypatch.setenv("CI", "true")
     monkeypatch.setattr(sys, "prefix", sys.base_prefix)
     repo = tmp_path / "a" / "GitHub" / "depot"
     (repo / "src" / "slm_weight_editing").mkdir(parents=True)

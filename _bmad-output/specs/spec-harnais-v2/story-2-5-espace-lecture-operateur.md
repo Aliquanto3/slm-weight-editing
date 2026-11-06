@@ -136,6 +136,7 @@ Amendements 1 à 12 traités. Le crochet (`_refusal_hook.py`) appelle `audit_tra
 - Tests : `workspace.OPERATOR_DIR` est redirigé vers un dossier temporaire par une fixture de `conftest.py`, pour ne rien écrire dans `models/` du dépôt.
 - Reste à l'essai à blanc d'Anaël : crochet en `dontAsk`, combinaison avec `blockReads…`, deny `Read(//c/…)`, coût par appel (~0,1 s mesuré pour l'import).
 - README non mis à jour (documentation de la story à faire d'après cette fiche).
+- Repli de `hook_python` sur `sys.prefix` réservé à la CI (`CI` ou `GITHUB_ACTIONS` posée, ni vide ni `false`/`0`) : `3c154c2` relu, conforme à l'amendement 6 hors CI (refus « interpréteur du crochet introuvable »).
 
 ## Revue
 
