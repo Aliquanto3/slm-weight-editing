@@ -144,6 +144,26 @@ def write_config_bytes(path: Path, data: bytes) -> None:
     os.replace(tmp, path)
 
 
+BACKUP_DIR = "detach-bak"  # dans le dossier de séance, hors de work/ (non haché, non publié)
+
+
+def _recover(directory: Path, work: Path, detached: bool) -> None:
+    """Reprend une tentative tuée : restaure work/ (sans ligne de journal) ou nettoie (avec).
+
+    Les sauvegardes sont hors de work/ : un reste ne compte jamais comme fichier du checkpoint
+    (hash de work/, files_changed, audit). Les temporaires d'écriture laissés dans work/ sont
+    retirés dans les deux cas.
+    """
+    backups = directory / BACKUP_DIR
+    if backups.is_dir():
+        if not detached:
+            for saved in sorted(backups.iterdir()):
+                os.replace(saved, work / saved.name)
+        shutil.rmtree(backups)
+    for tmp in [*work.glob("*.safetensors.tmp"), work / (CONFIG_FILE + ".tmp")]:
+        tmp.unlink(missing_ok=True)
+
+
 def detach_lm_head(
     session_id: str, *, sessions_root: str | Path = harness.DEFAULT_SESSIONS_ROOT
 ) -> dict:
@@ -153,9 +173,11 @@ def detach_lm_head(
     with harness._session_lock(directory):
         if harness.read_state(directory).frozen:
             raise HarnessError("séance gelée : détachement de lm_head refusé")
-        if detach_event(harness.read_journal(directory)) is not None:
-            raise HarnessError("lm_head déjà détaché dans cette séance : refus")
+        detached = detach_event(harness.read_journal(directory)) is not None
         work = directory / harness.WORK_DIR
+        _recover(directory, work, detached)
+        if detached:
+            raise HarnessError("lm_head déjà détaché dans cette séance : refus")
         try:
             index = open_checkpoint(work)
         except SafetensorsError as exc:
@@ -180,8 +202,8 @@ def detach_lm_head(
         journal = harness.read_journal(directory)
         opened = next((e for e in journal if e.get("event") == "open"), {})
         base_sha = opened.get("base_files_sha256", {}).get(CONFIG_FILE)
-        if base_sha is not None and base_sha != _sha(config_bytes):
-            # Le gel ne pourrait pas rejouer la transformation sur la config de la base.
+        if base_sha != _sha(config_bytes):
+            # Config modifiée ou ajoutée : le gel ne pourrait pas rejouer la transformation.
             raise HarnessError(
                 f"{CONFIG_FILE} de work/ modifié depuis l'ouverture : détachement refusé"
             )
@@ -189,9 +211,13 @@ def detach_lm_head(
         raw = embed.read_bytes()
         file_before = harness._sha256_file(embed.path)
         new_text, keys = transform_config(config_bytes.decode("utf-8"))
-        backup = embed.path.with_name(embed.path.name + ".detach-bak")
+        backups = directory / BACKUP_DIR
+        backups.mkdir()
+        backup = backups / embed.path.name
         # Tenseur, config et journal : une erreur entre deux écritures remet work/ en l'état,
         # sinon la séance resterait déliée sans ligne au journal (refusée au gel et au détachement).
+        # Processus tué : la sauvegarde reste dans le dossier de séance, reprise par _recover.
+        write_config_bytes(backups / CONFIG_FILE, config_bytes)
         try:
             append_tensor(embed.path, LM_HEAD, embed.dtype, list(embed.shape), raw, backup=backup)
             write_config(config, new_text)
@@ -216,12 +242,9 @@ def detach_lm_head(
             }
             harness._append_journal(directory, entry)
         except BaseException:
-            if backup.exists():
-                os.replace(backup, embed.path)
-            if config.read_bytes() != config_bytes:
-                write_config_bytes(config, config_bytes)
+            _recover(directory, work, detached=False)
             raise
-        backup.unlink(missing_ok=True)
+        shutil.rmtree(backups)
         return entry
 
 

@@ -671,3 +671,33 @@ def test_detach_interrupted_before_the_journal_line_restores_work(sess, monkeypa
     assert sorted(p.name for p in work.iterdir()) == ["config.json", "model.safetensors"]
     detach(sess)  # la séance n'est pas bloquée : le détachement se refait
     assert lm_head.detach_event(harness.read_journal(sess["dir"])) is not None
+
+
+def test_detach_killed_between_the_two_renames_is_recovered_by_the_next_detach(sess):
+    # État laissé par un processus tué : modèle déplacé en sauvegarde, temporaire dans work/.
+    work, backups = sess["work"], sess["dir"] / lm_head.BACKUP_DIR
+    model, config = (work / "model.safetensors").read_bytes(), (work / "config.json").read_bytes()
+    backups.mkdir()
+    (work / "model.safetensors").replace(backups / "model.safetensors")
+    (backups / "config.json").write_bytes(config)
+    (work / "model.safetensors.tmp").write_bytes(b"partiel")
+    entry = detach(sess)
+    assert entry["file_sha256_before"] == sha(model)
+    assert entry["config"]["sha256_before"] == sha(config)
+    assert sorted(p.name for p in work.iterdir()) == ["config.json", "model.safetensors"]
+    assert not backups.exists()
+
+
+def test_backup_left_after_the_journal_line_is_not_a_work_file(sess):
+    # Tué après la ligne de journal : la sauvegarde reste hors de work/, jamais publiée.
+    detach(sess)
+    backups = sess["dir"] / lm_head.BACKUP_DIR
+    assert not backups.exists()
+    backups.mkdir()
+    (backups / "model.safetensors").write_bytes((sess["base"] / "model.safetensors").read_bytes())
+    with pytest.raises(HarnessError, match="déjà détaché"):
+        detach(sess)
+    assert not backups.exists()  # nettoyée, work/ intact
+    backups.mkdir()
+    (backups / "model.safetensors").write_bytes(b"reste")
+    assert freeze_it(sess)["files_changed"] == []

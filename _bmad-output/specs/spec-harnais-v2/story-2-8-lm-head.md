@@ -107,3 +107,14 @@ Base à jour (main a691faa). Tests ciblés : lm_head, freeze, audit_transcript, 
 - Rejeté · low · second avis 4 : « s'il existe » du critère 1 porte sur `text_config`, pas sur la clé ; écrire `text_config.tie_word_embeddings: false` dès que `text_config` existe est le comportement demandé (et le plus sûr pour Qwen3.5).
 - Nit · low · second avis 5 · corrigé : la comparaison n'était pas tautologique (elle confrontait la consigne rendue à la liste blanche), mais elle suivait la constante ; liste écrite en dur.
 - Complexité : 0 constat (pas de structure qui grossit parcourue à chaque événement en plus de l'existant).
+
+### Passe 2 (2026-11-06, SHA revu 23149d1)
+
+Relu `90cccf8..23149d1`. Tests ciblés verts (lm_head, freeze, audit_transcript, session_workspace, harness, report_gguf), ruff vert.
+
+- Important · medium · revue · corrigé : la sauvegarde `model.safetensors.detach-bak` était dans work/ ; un processus tué après la ligne de journal la laissait, et le gel la publiait comme fichier ajouté (`files_changed`, sha256_before nul : copie complète du modèle qu'apply-diff ne peut pas produire) ; tué entre les deux renommages, work/ n'avait plus de safetensors et rien ne la reprenait. Sauvegardes (tenseur et config) déplacées dans `<séance>/detach-bak/`, hors de work/ (ni haché, ni audité, ni publié) ; le détachement suivant restaure work/ s'il n'y a pas de ligne de journal, nettoie sinon, et retire les temporaires `.tmp` laissés dans work/. Tests `test_detach_killed_between_the_two_renames_is_recovered_by_the_next_detach`, `test_backup_left_after_the_journal_line_is_not_a_work_file`.
+- Nit · low · revue · corrigé : une `config.json` absente de la base mais ajoutée dans work/ passait le refus « modifiée depuis l'ouverture » et n'était refusée qu'au gel ; refus dès le détachement.
+- Nit · low · revue · rejeté : `os.replace` sous Windows sur le fichier d'embeddings ; `SafeTensor` ne garde aucun descripteur ouvert (lecture par `with`), et le verrou de séance exclut lots et sondes pendant le détachement.
+- Nit · low · revue · rejeté : restauration en échec dans le `except` ; l'exception d'origine reste chaînée et la sauvegarde, hors de work/, est reprise au détachement suivant.
+- `_check_detached_config` et le refus d'une transformation non rejouable au gel : conformes (une config déliée avec d'autres modifications reste signalée par `files_changed`).
+- Complexité : 0 constat.
