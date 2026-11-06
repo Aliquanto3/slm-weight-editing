@@ -366,7 +366,7 @@ def test_settings_hook_block(ws):
                 "hooks": [
                     {
                         "type": "command",
-                        "command": workspace.posix(workspace.hook_python(REPO)),
+                        "command": workspace.hook_python(REPO).as_posix(),
                         "args": [
                             "-I",
                             "-B",
@@ -381,7 +381,23 @@ def test_settings_hook_block(ws):
     }
 
 
-def test_workspace_refused_without_hook_interpreter(tmp_path, base):
+def test_hook_python_falls_back_to_running_venv(tmp_path, monkeypatch):
+    """Sans `.venv` dans le dépôt (CI) : environnement virtuel courant, chemin non résolu."""
+    monkeypatch.setattr(sys, "prefix", str(tmp_path / "venv"))
+    monkeypatch.setattr(sys, "base_prefix", str(tmp_path / "base"))
+    rel = ("Scripts", "python.exe") if sys.platform == "win32" else ("bin", "python")
+    exe = tmp_path.joinpath("venv", *rel)
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"")
+    assert workspace.hook_python(tmp_path / "depot") == exe.absolute()
+    local = tmp_path.joinpath("depot", ".venv", *rel)
+    local.parent.mkdir(parents=True)
+    local.write_bytes(b"")
+    assert workspace.hook_python(tmp_path / "depot") == local.absolute()
+
+
+def test_workspace_refused_without_hook_interpreter(tmp_path, base, monkeypatch):
+    monkeypatch.setattr(sys, "prefix", sys.base_prefix)
     repo = tmp_path / "a" / "GitHub" / "depot"
     (repo / "src" / "slm_weight_editing").mkdir(parents=True)
     with pytest.raises(workspace.WorkspaceError, match="interpréteur du crochet introuvable"):

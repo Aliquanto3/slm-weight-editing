@@ -123,10 +123,19 @@ def rule_path(path: Path) -> str:
 
 
 def hook_python(repo: Path) -> Path:
-    """Interpréteur du `.venv` du dépôt, qui lance le crochet en forme exec (sans shell)."""
-    if sys.platform == "win32":
-        return repo / ".venv" / "Scripts" / "python.exe"
-    return repo / ".venv" / "bin" / "python"
+    """Interpréteur qui lance le crochet en forme exec (sans shell).
+
+    Celui du `.venv` du dépôt, sinon celui de l'environnement virtuel qui fait tourner le harnais
+    (`uv run` hors `.venv` local, CI). Chemin absolu jamais résolu : sous POSIX, `bin/python` est un
+    lien vers l'interpréteur de base, qui perdrait les `site-packages` (et le `.pth` du dépôt).
+    """
+    rel = Path("Scripts", "python.exe") if sys.platform == "win32" else Path("bin", "python")
+    local = (repo / ".venv" / rel).absolute()
+    if local.is_file():
+        return local
+    if sys.prefix != sys.base_prefix and (Path(sys.prefix) / rel).is_file():
+        return (Path(sys.prefix) / rel).absolute()
+    return local
 
 
 def operator_dir(repo: Path) -> Path:
@@ -140,7 +149,7 @@ def hook_settings(workspace: Path, repo: Path) -> dict:
     """
     command = {
         "type": "command",
-        "command": posix(hook_python(repo)),
+        "command": hook_python(repo).as_posix(),
         "args": ["-I", "-B", posix(repo / HOOK_SCRIPT), posix(workspace)],
         "timeout": HOOK_TIMEOUT,
     }
@@ -300,7 +309,7 @@ def check_location(out: Path, repo: Path) -> None:
     if out.exists() and any(out.iterdir()):
         raise WorkspaceError(f"espace refusé : {out} existe et n'est pas vide")
     python = hook_python(repo)
-    if not python.is_file() or not _SAFE_PATH.match(posix(python)):
+    if not python.is_file() or not _SAFE_PATH.match(python.as_posix()):
         raise WorkspaceError(f"interpréteur du crochet introuvable : {python} (uv sync)")
     if not (repo / HOOK_SCRIPT).is_file():
         raise WorkspaceError(f"crochet de refus introuvable : {repo / HOOK_SCRIPT}")
