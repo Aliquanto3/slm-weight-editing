@@ -1,5 +1,5 @@
 ---
-status: draft
+status: decided
 story: "2.6"
 title: Audit sans les faux positifs de s1, signalement du décodage autorégressif (CAP-9, audit de CAP-3)
 ---
@@ -71,3 +71,13 @@ L'audit ne signale plus les usages légitimes vus en s1 (`re.compile`, décodage
 3. Seuil des suites de probes : un jeton ajouté exactement, ou de 1 à k jetons ? À partir de combien d'appels consécutifs ?
 4. Corriger dans cette story le faux positif `etat-seance` d'un script qui lit le journal par `open` et écrit `work/` ?
 5. L'acceptation de `chr(` et du décodage d'octets vaut-elle seulement pour le code (copies, outils d'écriture), en gardant le refus dans les commandes shell ?
+
+## Décisions de l'orchestrateur (2026-11-06)
+
+Anaël a levé ses points d'arrêt de relecture le 2026-11-06 (« Retire mes points d'arrêt et continue »). Les réponses ci-dessous sont prises par l'orchestrateur, au plus prudent ; Anaël peut les revoir à la relecture des PR.
+
+1. Une copie de script ou une suite de probes signalée apparaît dans une liste à relire, avec un code de sortie distinct (0 propre, 1 violation, 2 à relire seulement). Elle ne fait pas échouer l'audit.
+2. L'agent peut rejouer l'audit sur la transcription s1 locale, sans rien commiter. Les tests reproduisent la forme des faux positifs (outil, motif) sur des données synthétiques, sans contenu privé.
+3. Suite signalée : de 1 à 4 jetons ajoutés à chaque appel, à partir de 3 appels consécutifs.
+4. Oui, ce faux positif `etat-seance` est corrigé dans cette story.
+5. Oui : `chr(` et le décodage d'octets sont acceptés seulement dans le code (copies de scripts, outils d'écriture). Le refus reste dans les commandes shell.

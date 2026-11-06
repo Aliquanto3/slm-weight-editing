@@ -1,5 +1,5 @@
 ---
-status: draft
+status: decided
 story: "2.5"
 title: Espace de séance, lecture libre, OPERATEUR.md, refus expliqués, BLOCAGES.md (CAP-4, CAP-5, CAP-6, consigne de CAP-3)
 ---
@@ -87,3 +87,13 @@ Chaque refus dit quelle règle il applique et ce qui est permis à la place. L'�
 3. Tes crochets et tes mods personnels (`~/.claude/settings.json`, agent-cost-kit) tournent aussi dans l'espace, et un crochet `allow` ou un mod peut contourner `dontAsk` ou un deny. Vérification à la main avant la séance, ou lancement avec un `--settings` dédié ?
 4. Lecture libre : les scripts peuvent-ils lire aussi `.claude/settings.json`, `workspace.json` (qui contient le chemin du dépôt), les copies `sessions/<id>/scripts/` et `freeze/` ? Ou faut-il en exclure certains ?
 5. `notes/BLOCAGES.md` : est-il publié avec le gel (comme le journal public) ou reste-t-il privé ?
+
+## Décisions de l'orchestrateur (2026-11-06)
+
+Anaël a levé ses points d'arrêt de relecture le 2026-11-06 (« Retire mes points d'arrêt et continue »). Les réponses ci-dessous sont prises par l'orchestrateur, au plus prudent ; Anaël peut les revoir à la relecture des PR.
+
+1. `models/operateur/<id>.md` dans le dépôt, ignoré par git, hors de portée des trois couches.
+2. Forme exec avec le `python.exe` du `.venv` du dépôt, bibliothèque standard seule. Un crochet en échec laisse passer l'appel : les deny restent la porte, le crochet ne fait qu'expliquer.
+3. Lancement documenté de la séance avec `claude --setting-sources project,local` (réglages utilisateur exclus, donc crochets et mods personnels exclus), plus une vérification `/hooks` à la main au départ, inscrite dans OPERATEUR.md. Le test vérifie que la commande de lancement rendue contient l'option.
+4. Tout l'espace est lisible par les scripts, y compris `.claude/settings.json`, `workspace.json`, `sessions/<id>/scripts/` et `freeze/`. `heldout/` et le dépôt restent hors de portée.
+5. `notes/BLOCAGES.md` est publié avec le gel, comme le journal public.

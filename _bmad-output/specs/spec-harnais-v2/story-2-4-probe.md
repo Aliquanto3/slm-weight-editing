@@ -1,5 +1,5 @@
 ---
-status: draft
+status: decided
 story: "2.4"
 title: Commande probe et budget de probe (CAP-1)
 ---
@@ -68,3 +68,13 @@ Estimation de sortie (avant calcul) : Σ textes × positions retenues × (couche
 3. Un appel qui plante après sa réservation consomme-t-il ses jetons, comme un lot ?
 4. `probes/` interdit en écriture à l'éditeur (deny `Edit`, crochet du lanceur), et captures non publiées au gel (seuls leurs sha256 au journal) ?
 5. Faut-il un plafond disque cumulé pour `probes/` sur la séance (2 M jetons de captures plein résidu peuvent dépasser des dizaines de Go) ?
+
+## Décisions de l'orchestrateur (2026-11-06)
+
+Anaël a levé ses points d'arrêt de relecture le 2026-11-06 (« Retire mes points d'arrêt et continue »). Les réponses ci-dessous sont prises par l'orchestrateur, au plus prudent ; Anaël peut les revoir à la relecture des PR.
+
+1. Texte brut seulement en s2. L'éditeur peut écrire lui-même le gabarit de chat dans le texte. `token_ids` et `--chat` sont reportés.
+2. Option `--probe-budget` de `session-workspace`, 2 000 000 jetons par défaut, inscrite dans la ligne `open`. Une séance ouverte sans ce champ (v1, s1) refuse probe, avec un message qui le dit.
+3. Oui : la réservation est consommée même si l'appel plante après elle, comme un lot.
+4. Oui : `probes/` est interdit en écriture à l'éditeur (deny `Edit`/`Write` et crochet du lanceur). Les captures ne sont pas publiées au gel, seuls leurs sha256 sont au journal.
+5. Oui : plafond disque cumulé de `probes/` sur la séance, 20 Go par défaut (option `--probe-disk-max` de `session-workspace`), vérifié avant calcul avec l'estimation de sortie.

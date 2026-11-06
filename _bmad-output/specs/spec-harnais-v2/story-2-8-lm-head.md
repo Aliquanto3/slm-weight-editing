@@ -1,5 +1,5 @@
 ---
-status: draft
+status: decided
 story: "2.8"
 title: lm_head détaché, n'éditer que la sortie (CAP-10)
 ---
@@ -68,3 +68,13 @@ Pendant la séance, l'éditeur peut séparer `lm_head` des embeddings liés par 
 3. Le détachement est-il permis après une édition de `embed_tokens` ? Si oui, copie-t-on l'embed courant (déjà édité) ou celui de la base ?
 4. Comment présenter une séance avec `lm_head` détaché dans la comparaison au MIT (mention dans le rapport, compteur à part) ?
 5. Si l'essai 2.7 passe mais que l'écart de taille ou de temps de réponse au banc est net, quel seuil fait sortir CAP-10 de s2 ?
+
+## Décisions de l'orchestrateur (2026-11-06)
+
+Anaël a levé ses points d'arrêt de relecture le 2026-11-06 (« Retire mes points d'arrêt et continue »). Les réponses ci-dessous sont prises par l'orchestrateur, au plus prudent ; Anaël peut les revoir à la relecture des PR.
+
+1. Oui : diff au format v2, le détachement est une transformation rejouée par apply-diff.
+2. `detach-lm-head`. Il ne consomme ni lot ni jeton de probe, mais il est journalisé et refusé après le gel.
+3. Permis à tout moment. On copie l'embed courant de `work/` (éventuellement déjà édité). Le diff rejoue les transformations dans l'ordre, donc le résultat reste vérifiable.
+4. Champ `lm_head_detached` dans le rapport et mention « écart de protocole » dans la comparaison au MIT.
+5. Story codée sans attendre l'essai 2.7. CAP-10 sort de s2 si l'essai 2.7 échoue, ou si le GGUF détaché dépasse le témoin de plus de 25 % en taille ou de 20 % en temps de réponse médian au banc.
