@@ -6,6 +6,7 @@ code testé, et `output_hidden_states` en recoupement) sur les mêmes poids.
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 from pathlib import Path
@@ -151,8 +152,33 @@ def reference(work: Path, texts: list[str]):
         for i in range(LAYERS):
             seen[f"resid_pre_l{i}"] = res.hidden_states[i]
         seen["logits"] = res.logits
-        rows.append({k: v[0].float().numpy() for k, v in seen.items()})
+        row = {k: v[0].float().numpy() for k, v in seen.items()}
+        row["logits_at"] = functools.partial(
+            logits_at, model.get_output_embeddings(), seen["final_norm"]
+        )
+        rows.append(row)
     return rows
+
+
+def logits_at(head, final_norm, positions: list[int], chunk: int | None = None) -> np.ndarray:
+    """Logits des positions, avec la même forme de matmul que `probe` (bits identiques).
+
+    Blocs de `LOGIT_CHUNK` positions, chaque bloc complété à `MIN_LOGIT_ROWS` lignes en répétant
+    la dernière position, puis tronqué : BLAS ne garantit pas les mêmes bits d'une forme à l'autre.
+    """
+    size = chunk or probe.LOGIT_CHUNK
+    parts = []
+    with torch.inference_mode():
+        for start in range(0, len(positions), size):
+            part = positions[start : start + size]
+            padded = part + [part[-1]] * (probe.MIN_LOGIT_ROWS - len(part))
+            index = torch.tensor(padded, dtype=torch.long)
+            parts.append(head(final_norm[0, index]).float()[: len(part)])
+    return torch.cat(parts).numpy()
+
+
+def all_logits(ref: list[dict], chunk: int | None = None) -> np.ndarray:
+    return np.concatenate([r["logits_at"](list(range(len(r["final_norm"]))), chunk) for r in ref])
 
 
 @pytest.mark.parametrize("which", ["f32", "bf16"])
@@ -173,7 +199,7 @@ def test_captures_equal_reference_forward(tmp_path, ckpt, ckpt_bf16, which):
         assert np.array_equal(got, want), name
     ids = np.load(out / "top_logit_ids.npy")
     vals = np.load(out / "top_logit_values.npy")
-    want_logits = np.concatenate([r["logits"] for r in ref])
+    want_logits = all_logits(ref)
     assert ids.shape == (10, len(WORDS)) and vals.dtype == np.float32
     top = torch.topk(torch.from_numpy(want_logits), len(WORDS), dim=-1)
     assert np.array_equal(ids, top.indices.numpy())
@@ -223,10 +249,10 @@ def test_positions_layers_token_ids_and_full_vocab(ws):
     want = np.concatenate([r["resid_l1"][1:3] for r in ref])
     assert np.array_equal(got, want)
     tl = np.load(out / "token_logits.npy")
-    assert np.array_equal(tl, np.concatenate([r["logits"][1:3][:, [7, 9]] for r in ref]))
+    assert np.array_equal(tl, np.concatenate([r["logits_at"]([1, 2])[:, [7, 9]] for r in ref]))
     fv = np.load(out / "full_vocab_logits.npy")
     assert fv.shape == (2, len(WORDS))
-    assert np.array_equal(fv, np.stack([r["logits"][3] for r in ref]))
+    assert np.array_equal(fv, np.stack([r["logits_at"]([3])[0] for r in ref]))
     assert manifest["full_vocab_rows"] == [
         {"text": 0, "position": 3},
         {"text": 1, "position": 3},
@@ -668,7 +694,7 @@ def test_logits_never_materialised_for_all_positions(ws, monkeypatch):
     monkeypatch.undo()
     ref = reference(session(ws) / "work", TEXTS)
     out = ws / "probes" / "1"
-    want = torch.from_numpy(np.concatenate([r["logits"] for r in ref]))
+    want = torch.from_numpy(all_logits(ref, chunk=4))
     top = torch.topk(want, len(WORDS), dim=-1)
     assert np.array_equal(np.load(out / "top_logit_values.npy"), top.values.numpy())
     assert np.array_equal(np.load(out / "top_logit_ids.npy"), top.indices.numpy())
