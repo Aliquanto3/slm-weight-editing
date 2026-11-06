@@ -34,10 +34,18 @@ _PICKERS = {
     "choices",
     "multinomial",
     "categorical",
+    # tirage uniforme, par exemple par cumul inverse `(np.cumsum(p) < rng.random()).sum()`
+    "random",
+    "rand",
+    "random_sample",
+    "uniform",
 }
 _SAMPLERS = {"choice", "choices", "multinomial", "categorical"}
 _NOT_SEQUENCE_USE = {"len", "print", "range", "enumerate", "isinstance", "str", "repr"}
 _APPEND_METHODS = {"append", "extend", "insert"}
+# Tirage sur des probabilités : `choice(a, size, replace, p)`, `choices(population, weights)`.
+_PROBABILITY_KEYWORDS = {"p", "weights", "cum_weights"}
+_PROBABILITY_POSITION = {"choice": 3, "choices": 1}
 
 
 @dataclass(frozen=True)
@@ -78,9 +86,40 @@ def _names(node: ast.AST) -> set[str]:
 
 def _picks(node: ast.AST) -> str | None:
     for n in ast.walk(node):
-        if isinstance(n, ast.Call) and _call_name(n) in _PICKERS:
-            return _call_name(n)
+        if not isinstance(n, ast.Call):
+            continue
+        name = _call_name(n)
+        if name in _PICKERS:
+            return name
+        if name in {"max", "min"} and any(k.arg == "key" for k in n.keywords):
+            return name  # `max(range(V), key=lambda i: logits[i])`
     return None
+
+
+def _samples(call: ast.Call) -> bool:
+    """Tirage aléatoire sur des probabilités (un `choice` sans poids n'en est pas un)."""
+    name = _call_name(call)
+    if name not in _SAMPLERS:
+        return False
+    if name not in _PROBABILITY_POSITION:
+        return True
+    return any(k.arg in _PROBABILITY_KEYWORDS for k in call.keywords) or (
+        len(call.args) > _PROBABILITY_POSITION[name]
+    )
+
+
+def _resolve_aliases(tree: ast.AST) -> None:
+    """Rend leur nom aux fonctions importées sous alias (`from numpy import argmax as am`)."""
+    aliases = {
+        a.asname: a.name
+        for n in ast.walk(tree)
+        if isinstance(n, ast.ImportFrom)
+        for a in n.names
+        if a.asname and a.name in _PICKERS
+    }
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Name) and n.id in aliases:
+            n.id = aliases[n.id]
 
 
 def _target_name(target: ast.AST) -> str | None:
@@ -157,9 +196,10 @@ def scan_script(source: str) -> list[tuple[int, str, str]]:
         return [
             (getattr(exc, "lineno", None) or 0, "illisible", f"copie non lisible en AST : {exc}")
         ]
+    _resolve_aliases(tree)
     found: dict[tuple[int, str], str] = {}
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and _call_name(node) in _SAMPLERS:
+        if isinstance(node, ast.Call) and _samples(node):
             found[(node.lineno, "tirage")] = f"tirage aléatoire « {_call_name(node)} »"
         if isinstance(node, ast.For | ast.While):
             motif = _loop_feedback(node)
@@ -179,35 +219,36 @@ def _texts_of(manifest: Path) -> list[list[int]] | None:
     return None
 
 
-def _extends(current: list[list[int]], previous: list[list[int]]) -> bool:
-    return any(
-        1 <= len(c) - len(p) <= MAX_ADDED and c[: len(p)] == p
-        for c in current
-        for p in previous
-        if p
-    )
-
-
 def scan_probe_suites(probes: list[tuple[int, list[list[int]]]]) -> list[tuple[list[int], int]]:
-    """Suites (numéros d'appels, longueur) d'appels successifs qui prolongent le précédent.
+    """Suites (numéros d'appels, longueur) d'appels dont chacun prolonge un texte d'un précédent.
 
-    `probes` : (numéro d'appel, textes en `token_ids`) dans l'ordre du journal. Une suite compte
-    au moins `MIN_CALLS` appels ; les textes préfixes l'un de l'autre dans un seul appel ne font
-    pas une suite (ils sont fixés avant le calcul).
+    `probes` : (numéro d'appel, textes en `token_ids`) dans l'ordre du journal. Les suites se
+    suivent par chaîne de préfixes : un appel sans rapport intercalé ne les coupe pas. Une suite
+    compte au moins `MIN_CALLS` appels ; les textes préfixes l'un de l'autre dans un seul appel, ou
+    déjà vus dans un appel antérieur (rescorage), ne prolongent rien.
+    Coût : O(textes × `MAX_ADDED`) recherches dans un index des textes vus.
     """
-    suites: list[tuple[list[int], int]] = []
-    run: list[int] = []
-    for i, (number, texts) in enumerate(probes):
-        if i and _extends(texts, probes[i - 1][1]):
-            run = run or [probes[i - 1][0]]
-            run.append(number)
-            continue
-        if len(run) >= MIN_CALLS:
-            suites.append((run, len(run)))
-        run = []
-    if len(run) >= MIN_CALLS:
-        suites.append((run, len(run)))
-    return suites
+    chains: list[list[int]] = []
+    owner: dict[tuple[int, ...], int] = {}  # texte vu -> chaîne de l'appel qui l'a soumis
+    for number, texts in probes:
+        keys = [tuple(t) for t in texts if t]
+        chain = None
+        for key in keys:
+            if key in owner:
+                continue
+            for added in range(1, min(MAX_ADDED, len(key) - 1) + 1):
+                chain = owner.get(key[:-added])
+                if chain is not None:
+                    break
+            if chain is not None:
+                break
+        if chain is None:
+            chains.append([])
+            chain = len(chains) - 1
+        chains[chain].append(number)
+        for key in keys:
+            owner[key] = chain
+    return [(numbers, len(numbers)) for numbers in chains if len(numbers) >= MIN_CALLS]
 
 
 def review_candidates(session: str | Path, workspace: str | Path | None = None) -> list[Candidate]:

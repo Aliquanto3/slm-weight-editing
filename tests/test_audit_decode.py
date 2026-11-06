@@ -321,3 +321,64 @@ def test_check_tool_use_never_reports_the_review_rule():
         "Write", {"file_path": "scripts/gen.py", "content": GENERATIVE}, CTX_S1
     )
     assert found == [], found
+
+
+# Revue passe 1 : exemption de lecture prouvée par l'AST, formes de décodage, suites entrelacées.
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        'f = open(Path("sessions/s1/journal.jsonl").resolve(), "a")\nf.write("{}")\n',
+        'rows = (p := Path("sessions/s1/state.json")).read_text()\np.write_text(rows)\n',
+        'p = Path("sessions/s1/state.json"); rows = p.read_text()\np.write_text(rows)\n',
+        'f = open("sessions/s1/journal.jsonl", mode)\nf.write("{}")\n',
+    ],
+)
+def test_write_through_a_read_looking_line_stays_flagged(code):
+    assert "etat-seance" in {r for r, _ in audit._check_code(code, "Write", False)}
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'rows = [json.loads(x) for x in open("sessions/s1/journal.jsonl")]',
+        'data = json.loads(Path("sessions/s1/state.json").read_text(encoding="utf-8"))',
+        'for line in Path("sessions/s1/journal.jsonl").open(encoding="utf-8"):',
+        'with open(Path("sessions/s1/journal.jsonl"), "rb") as f:',
+    ],
+)
+def test_proven_reads_of_the_journal_are_clean(line):
+    code = f"{line}\n    pass\nopen('work/x', 'w').write('y')\n"
+    assert audit._check_code(code, "Write", False) == []
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "ids = [1]\nfor _ in range(9):\n    logits = forward(ids)\n"
+        "    nxt = max(range(V), key=lambda i: logits[i])\n    ids.append(nxt)\n",
+        "from numpy import argmax as am\nids = [1]\nfor _ in range(9):\n"
+        "    nxt = am(forward(ids))\n    ids.append(nxt)\n",
+        "ids = [1]\nfor _ in range(9):\n    p = softmax(forward(ids))\n"
+        "    nxt = int((np.cumsum(p) < rng.random()).sum())\n    ids.append(nxt)\n",
+    ],
+)
+def test_other_generative_forms_are_listed(code):
+    found = decode.scan_script(code)
+    assert len(found) == 1 and found[0][2].startswith("boucle à rétroaction")
+
+
+@pytest.mark.parametrize("code", ["i = rng.choice(len(data), size=8)", "x = random.choice(names)"])
+def test_choice_without_probabilities_alone_is_not_listed(code):
+    assert decode.scan_script(code) == []
+
+
+def test_unrelated_call_inside_a_suite_does_not_break_it():
+    probes = [(1, [[1]]), (2, [[1, 2]]), (3, [[7, 7]]), (4, [[1, 2, 3]]), (5, [[1, 2, 3, 4]])]
+    assert decode.scan_probe_suites(probes) == [([1, 2, 4, 5], 4)]
+
+
+def test_repeated_prefix_scoring_is_not_a_suite():
+    batch = [[1], [1, 2], [1, 2, 3]]
+    assert decode.scan_probe_suites([(n, batch) for n in range(1, 6)]) == []

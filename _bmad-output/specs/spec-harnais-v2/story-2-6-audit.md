@@ -92,3 +92,20 @@ Anaël a levé ses points d'arrêt de relecture le 2026-11-06 (« Retire mes poi
 - Critère 8 (rejeu de la transcription s1) : non fait ici, aucune transcription s1 n'a été cherchée ; à faire par Anaël à la relecture.
 - Limites de l'heuristique : une affectation du nom protégé (`p = "journal.jsonl"`) ou un `open` sur plusieurs lignes reste signalé `etat-seance` ; une séquence portée par un attribut d'objet ou une fonction appelée hors de la boucle échappe à la détection ; signal « jeton parmi les 20 meilleurs » non implémenté.
 - `allow_abbrev=False` sur les sous-parseurs (report de la revue 2.5) : laissé, change la CLI. `ALLOWED_SUBCOMMANDS` non touchée.
+
+## Revue
+
+### Passe 1 (2026-11-06, SHA revu e0a1cf8)
+
+Base : `origin/main` (2d79040, story 2.8) fusionnée sans conflit avant la revue.
+
+- Important · medium · second avis 1 · corrigé · `_without_read_lines` retirait une ligne d'écriture prise pour une lecture (`open(Path("…journal.jsonl").resolve(), "a")` : `[^)]*` s'arrête à la parenthèse imbriquée) ; même perte sur `p = Path(j); p.read_text()` et `(p := Path(j)).read_text()` suivis de `p.write_text`. L'exemption passe par l'AST (`_line_only_reads`) : une instruction, chaque `open` en mode littéral de lecture, ni `:=` ni affectation d'autre chose qu'un résultat de lecture ; tout le reste reste compté. S'applique aussi au crochet.
+- Important · medium · second avis 2 · corrigé · formes de décodage manquées : `max(..., key=...)`, alias `from numpy import argmax as am`, tirage uniforme (`rng.random()`, cumul inverse) ajoutés à l'heuristique.
+- Important · medium · second avis 3 · corrigé · une sonde sans rapport intercalée coupait la suite : suites suivies par chaîne de préfixes (index des textes vus).
+- Nit · low · second avis 4 · corrigé · rescorage des mêmes préfixes à chaque appel compté comme suite : un texte déjà vu ne prolonge plus rien.
+- Nit · low · second avis 5 · corrigé en partie · `choice`/`choices` sans poids (`p`, `weights`) ne sont plus signalés seuls ; `seen.append(pred)` repassé à un appel reste listé (liste à relire, faux positif accepté).
+- Nit · low · second avis 6 · rejeté · code 2 partagé avec l'erreur d'usage d'argparse : décision 1 de l'orchestrateur ; une erreur d'usage écrit sur stderr sans sortie standard, ce qui la distingue.
+- Nit · low · second avis 7 · rejeté · le lookbehind actuel `(?<!\bre\.)(?<!\bregex\.)` est plus strict que celui de la fiche (`(?<![\w.])`, qui accepte tout `x.compile(`) ; `mod.re.compile(` passe sous les deux.
+- Pre-existing · low · revue · reporté · alias de fonctions interdites (`from builtins import compile as c`, `import builtins as re`) : l'audit textuel ne suit pas les alias, avant comme après la story.
+- Complexité : 1 constat, corrigé · `_extends` comparait toutes les paires de textes de deux appels ; l'index des textes vus ramène les suites à O(textes × 4).
+- Report · critère 8 (rejeu de la transcription s1) toujours à faire par Anaël.
