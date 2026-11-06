@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import posixpath
 import re
 import shlex
@@ -58,7 +59,50 @@ RULES = {
     "hors-espace-seance": "dossier courant, séance, racine ou données hors de l'espace de séance",
     "journal-seance": "ligne open du journal absente, multiple ou illisible",
     "base-differente": "séance ouverte sur une base qui diffère de la révision publiée",
+    "import-interdit": "module ou code hors de la bibliothèque standard, de numpy et de scripts/",
 }
+
+# Voie permise de chaque règle (story 2.5, CAP-6) : un refus vu par l'éditeur dit la règle et ce
+# qu'il peut faire à la place. Liste fermée : mêmes clés que RULES (test).
+_COMMANDS = "run-batch, session-status, run-script, probe"
+_NOTE = "note le besoin dans notes/BLOCAGES.md"
+ALLOWED_WAYS = {
+    "transcription": "rien à faire côté éditeur (audit d'Anaël)",
+    "outil-non-autorise": f"Read, Grep, Glob, Edit, Write, Bash ou PowerShell ; {_NOTE}",
+    "web": f"aucun accès réseau ; {_NOTE}",
+    "sous-agent": f"aucun sous-agent ; travaille seul avec {_COMMANDS}",
+    "lecture-interdite": "tout l'espace de séance est lisible, rien au-delà",
+    "modele-hors-harnais": "modèle par run-batch (génération) ou probe (forward sans génération)",
+    "api-harnais": "harnais par ses commandes seulement : " + _COMMANDS,
+    "etat-seance": "état par session-status ; journal en lecture seule ; seul work/ s'écrit",
+    "harnais-modifie": f"réglages, harnais et environnement intouchables ; {_NOTE}",
+    "ouverture-seance": "séance ouverte par Anaël ; état par session-status",
+    "gel-seance": "gel par Anaël ; écris EDITION.md puis « Édition terminée »",
+    "deverrouillage-seance": "verrou orphelin à signaler dans notes/BLOCAGES.md",
+    "commande-hors-liste": f"seules {_COMMANDS} ; Python par run-script ; lecture par Read",
+    "environnement": "commande écrite telle quelle, sans variable devant",
+    "lien": "aucun lien ; lis le fichier par son chemin dans l'espace",
+    "python-hors-lanceur": "Python par run-script scripts/NOM.py seulement",
+    "lecture-hors-espace": "tout l'espace de séance est lisible, rien au-delà",
+    "ecriture-hors-liste": "écris dans scripts/, notes/, EDITION.md ou work/*.safetensors",
+    "transcription-vide": "rien à faire côté éditeur (audit d'Anaël)",
+    "script-refuse": "numpy, safetensors.numpy et bibliothèque standard ; ni processus ni réseau",
+    "script-copie": "rien à faire côté éditeur (audit d'Anaël)",
+    "git": f"aucun historique ; {_NOTE}",
+    "installation": f"aucune installation ; numpy et bibliothèque standard ; {_NOTE}",
+    "obfuscation": "commande et code écrits en clair",
+    "hors-espace-seance": "reste dans l'espace : --sessions-root sessions, données de data/",
+    "journal-seance": "rien à faire côté éditeur (audit d'Anaël)",
+    "base-differente": "rien à faire côté éditeur (audit d'Anaël)",
+    "import-interdit": "numpy, safetensors.numpy, bibliothèque standard ; modèle par run-batch "
+    "ou probe",
+}
+
+
+def refusal_message(rule: str, detail: str) -> str:
+    """Refus expliqué : identifiant de la règle, détail, voie permise."""
+    return f"{rule} : {detail} ; permis : {ALLOWED_WAYS[rule]}"
+
 
 ALLOWED_SUBCOMMANDS = ("run-batch", "session-status", "run-script", "probe")
 # Aucun module du harnais n'est importable par l'éditeur (run-script les refuse aussi).
@@ -92,6 +136,7 @@ _FORBIDDEN_COMPACT = (
     "cadrage",
     "reportgguf",
     "memlog",
+    "operateur",
 )
 _SEGMENTS = r"(docs|tests|\.git|_bmad|_bmad-output|\.claude)"
 # Un segment de chemin : suivi de `/`, ou précédé de `/` (un mot isolé comme `tests` n'en est pas).
@@ -135,7 +180,7 @@ _WRITE_VERB = re.compile(
     r"|set-content|\bsc\b|add-content|\bac\b|out-file|clear-content|\bclc\b|new-item|\bni\b"
     r"|\btee\b|tee-object|\btruncate\b|\btouch\b|\bsed\b[^|;&]*\s-i|\bperl\b[^|;&]*\s-[a-z]*i"
     r"|\bdd\b|>|\bunlink\b|\bshred\b|\bchmod\b|\battrib\b|\bicacls\b|\bln\b|mklink|robocopy"
-    r"|xcopy|\.write|\bopen\s*\(|os\.remove|os\.replace|os\.rename|shutil|rmtree|\.unlink"
+    r"|xcopy|\.write|os\.remove|os\.replace|os\.rename|shutil|rmtree|\.unlink"
     r"|\.rename|\.replace\s*\(|\.touch|write_text|write_bytes|json\.dump|\bsave\w*\s*\("
 )
 _DELETE_VERB = re.compile(
@@ -195,17 +240,21 @@ def _compact(text: str) -> str:
     return re.sub(r"[^a-z0-9]", "", text.lower())
 
 
-def forbidden_reference(text: str) -> str | None:
-    """Raison du refus si le texte désigne un chemin ou un nom interdit, None sinon."""
+def forbidden_reference(text: str, *, in_workspace: bool = False) -> str | None:
+    """Raison du refus si le texte désigne un chemin ou un nom interdit, None sinon.
+
+    `in_workspace` : chemin lu par outil dans l'espace (CAP-5), où `.claude/` est lisible.
+    """
     norm = normalize(text)
     compact = _compact(norm)
     for term in _FORBIDDEN_COMPACT:
         if term in compact:
             return f"terme interdit « {term} »"
     for pattern in (_FORBIDDEN_SEGMENT, _FORBIDDEN_FILE):
-        m = pattern.search(norm)
-        if m:
-            return f"chemin interdit « {next(g for g in m.groups() if g)} »"
+        for m in pattern.finditer(norm):
+            segment = next(g for g in m.groups() if g)
+            if not (in_workspace and segment == ".claude"):
+                return f"chemin interdit « {segment} »"
     if _LEAVE_WORKSPACE.search(norm):
         return "sortie de l'espace de séance (cd vers un parent ou la racine)"
     if _SHORT_NAME.search(norm):
@@ -262,6 +311,32 @@ def _mentions_protected(norm: str, shell: bool) -> str | None:
     return None
 
 
+_OPEN_CALL = re.compile(r"(\b(?:os|io|codecs|gzip|bz2|lzma)\.|\.|\b)open\s*\(([^)]*)")
+_READ_MODE = re.compile(r"""^(?:mode\s*=\s*)?(?:"[rbtu]*"|'[rbtu]*')$""")
+
+
+def _open_writes(text: str) -> bool:
+    """Vrai si un `open(` du texte peut écrire : mode d'écriture, mode variable ou drapeaux.
+
+    `open(p)`, `open(p, "rb")` et `Path(p).open()` sont des lectures (CAP-5, lecture libre) ;
+    `open(p, "w")`, `open(p, mode)` ou `os.open(p, os.O_WRONLY)` restent des écritures.
+    """
+    for m in _OPEN_CALL.finditer(text.lower()):
+        args = [a.strip() for a in m.group(2).split(",") if a.strip()]
+        keyword = [a for a in args if a.startswith("mode") and "=" in a]
+        positional = [a for a in args if "=" not in a]
+        if m.group(1).startswith("os."):
+            flags = positional[1] if len(positional) > 1 else ""
+            if flags != "os.o_rdonly":
+                return True
+            continue
+        index = 0 if m.group(1) == "." else 1
+        mode = keyword[0] if keyword else (positional[index] if len(positional) > index else "")
+        if mode and not _READ_MODE.match(mode):
+            return True
+    return False
+
+
 def _check_code(text: str, tool: str, shell: bool) -> list[tuple[str, str]]:
     """Règles communes aux commandes shell et au code écrit par l'agent."""
     found: list[tuple[str, str]] = []
@@ -313,7 +388,7 @@ def _check_code(text: str, tool: str, shell: bool) -> list[tuple[str, str]]:
         reason = next((r for r in map(broad_reference, tokens) if r), None)
     if reason:
         found.append(("lecture-interdite", reason))
-    if _WRITE_VERB.search(stripped):
+    if _WRITE_VERB.search(stripped) or _open_writes(text):
         target = _mentions_protected(stripped, shell)
         if target:
             found.append(("etat-seance", f"écriture visant « {target} »"))
@@ -405,6 +480,10 @@ class Context:
     session_id: str | None = None
     # `cuda` de workspace.json : `--extra cuda` exigé si vrai, interdit si faux, libre sans espace.
     cuda: bool | None = None
+    # Dossier courant reçu par le crochet : base des chemins relatifs (l'espace sinon).
+    cwd: str | None = None
+    # Espace dans sa casse d'origine (résolution des liens sous POSIX, sensible à la casse).
+    root: str | None = None
 
     @classmethod
     def build(
@@ -417,9 +496,11 @@ class Context:
             from slm_weight_editing.workspace import repo_root
 
             repo = repo_root()
-        ws = None if workspace is None else _norm_path(Path(workspace).resolve().as_posix())
+        root = None if workspace is None else Path(workspace).resolve().as_posix()
+        ws = None if root is None else _norm_path(root)
         cuda = None if workspace is None else _workspace_cuda(Path(workspace))
-        return cls(ws, _norm_path(Path(repo).resolve().as_posix()), session_id, cuda)
+        repo_path = _norm_path(Path(repo).resolve().as_posix())
+        return cls(ws, repo_path, session_id, cuda, root=root)
 
 
 def _settings_env(workspace: Path) -> dict:
@@ -463,16 +544,33 @@ def _norm_path(path: str) -> str:
     return posixpath.normpath(path).lower().rstrip("/") if path else ""
 
 
+def _real(path: str) -> str:
+    """Chemin aux liens, jonctions et `..` résolus (tel quel si le système refuse)."""
+    try:
+        return os.path.realpath(path)
+    except OSError, ValueError:
+        return path
+
+
 def _absolute(path: str, ctx: Context) -> str | None:
-    """Chemin absolu normalisé (relatif à l'espace), None s'il est indéterminable."""
+    """Chemin absolu canonique (relatif au dossier courant reçu ou à l'espace), None sinon.
+
+    Indéterminables : variables, `~` (nom court 8.3), préfixes `//?/`, `//./` et UNC, flux NTFS
+    et lecteur relatif (`:` hors de `X:/`). Liens et jonctions résolus (`os.path.realpath`) : un
+    lien posé dans l'espace vers le dépôt désigne le dépôt (story 2.5, amendement 4).
+    """
     raw = path.strip().strip("\"'").replace("\\", "/")
-    if any(c in raw for c in "$%~`") or raw.startswith("//"):
+    if not raw or any(c in raw for c in "$%~`") or raw.startswith("//"):
         return None
-    if not (raw.startswith("/") or re.match(r"^[A-Za-z]:/", raw)):
-        if ctx.workspace is None:
+    drive = re.match(r"^[A-Za-z]:/", raw)
+    if ":" in (raw[3:] if drive else raw):
+        return None
+    if not (raw.startswith("/") or drive):
+        base = ctx.cwd or ctx.root or ctx.workspace
+        if base is None:
             return None
-        raw = f"{ctx.workspace}/{raw}"
-    return _norm_path(raw)
+        raw = f"{base.replace(chr(92), '/').rstrip('/')}/{raw}"
+    return _norm_path(_real(raw))
 
 
 def _in_workspace(path: str, ctx: Context) -> bool:
@@ -600,8 +698,11 @@ def check_tool_use(
     if name in FILE_READ_TOOLS:
         found = _check_paths(name, tool_input, ctx)
         for value in _strings(tool_input):
+            # Lecture libre de l'espace (CAP-5) : `.claude/` y est lisible, pas ailleurs.
+            inside = ctx.workspace is not None and _in_workspace(value, ctx)
             for variant in _variants(value):
-                reason = forbidden_reference(variant) or broad_reference(variant)
+                reason = forbidden_reference(variant, in_workspace=inside)
+                reason = reason or broad_reference(variant)
                 if reason:
                     found.append(("lecture-interdite", reason))
         return _unique(found)
@@ -853,6 +954,52 @@ def audit_batches(session: str | Path, workspace: str | Path) -> list[Violation]
     return found
 
 
+_REPARSE_POINT = 0x400  # FILE_ATTRIBUTE_REPARSE_POINT (jonction, lien symbolique, montage)
+
+
+def _is_link(path: Path, st: os.stat_result) -> bool:
+    if path.is_symlink() or path.is_junction():
+        return True
+    return bool(getattr(st, "st_file_attributes", 0) & _REPARSE_POINT)
+
+
+def audit_workspace_links(workspace: str | Path) -> list[Violation]:
+    """Liens de l'espace (story 2.5, amendement 10) : lecture libre, donc aucun lien toléré.
+
+    Tout lien symbolique, jonction ou autre point d'analyse NTFS, et tout fichier à liens
+    physiques multiples (`st_nlink > 1`), est une violation `lien`. Les liens ne sont pas suivis.
+    La racine elle-même peut être un lien (elle est résolue par Anaël en la désignant).
+    """
+    root = Path(workspace)
+    found: list[Violation] = []
+    if not root.is_dir():
+        return found  # espace absent : signalé par les réglages (env.UV_PROJECT absent)
+    pending = [root]
+    while pending:
+        current = pending.pop()
+        try:
+            children = sorted(current.iterdir())
+        except OSError as exc:
+            found.append(Violation(root.as_posix(), 0, "lien", "-", f"dossier illisible {exc}"))
+            continue
+        for child in children:
+            rel = child.relative_to(root).as_posix()
+            try:
+                st = os.lstat(child)
+            except OSError as exc:
+                found.append(Violation(root.as_posix(), 0, "lien", "-", f"{rel} illisible {exc}"))
+                continue
+            if _is_link(child, st):
+                detail = f"lien dans l'espace {rel}"
+                found.append(Violation(root.as_posix(), 0, "lien", "-", detail))
+            elif child.is_dir():
+                pending.append(child)
+            elif st.st_nlink > 1:
+                detail = f"lien physique dans l'espace {rel} ({st.st_nlink} noms)"
+                found.append(Violation(root.as_posix(), 0, "lien", "-", detail))
+    return found
+
+
 def audit_session_base(
     session: str | Path, reference: Reference | dict[str, str], revision: str | None = None
 ) -> list[Violation]:
@@ -963,6 +1110,7 @@ def run(args: argparse.Namespace) -> int:
         violations += audit_session_base(args.session_dir, reference, args.base_revision)
         violations += audit_scripts(args.session_dir)
         violations += audit_batches(args.session_dir, args.workspace)
+        violations += audit_workspace_links(args.workspace)
     except (OSError, ValueError) as exc:
         print(f"Erreur : {exc}", file=sys.stderr)
         return 2

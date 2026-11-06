@@ -75,6 +75,16 @@ DENY_NUMPY = ("numpy.f2py", "numpy.distutils", "numpy.ctypeslib", "numpy.testing
 PROTECTED = frozenset(
     ("state.json", "journal.jsonl", "registry.jsonl", "session.lock", "workspace.json", "freeze")
 )
+# Règle et voie permise de chaque refus (story 2.5, CAP-6) : identifiants de RULES de l'audit
+# (vérifié par test ; ce fichier n'importe rien du paquet).
+WAYS = {
+    "lecture-hors-espace": "tout l'espace de séance est lisible, rien au-delà",
+    "ecriture-hors-liste": "un script écrit dans work/ ou scripts/ seulement",
+    "etat-seance": "état par session-status ; journal et état en lecture seule",
+    "import-interdit": "numpy, safetensors.numpy, bibliothèque standard ; modèle par run-batch "
+    "ou probe",
+    "script-refuse": "numpy, safetensors.numpy et bibliothèque standard ; ni processus ni réseau",
+}
 # Fichiers chargeables comme code natif ou bytecode : jamais écrits par un script.
 NATIVE_SUFFIXES = (".pyd", ".so", ".dll", ".dylib", ".pyc", ".pyo", ".pth")
 
@@ -119,7 +129,7 @@ def make_hook(cfg, stdlib, local_modules, exec_roots):
     enc, errs = sys.getfilesystemencoding(), sys.getfilesystemencodeerrors()
     write_flags = os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_TRUNC
     deny_prefixes, deny_top, deny_numpy = DENY_PREFIXES, DENY_TOP, DENY_NUMPY
-    protected, refused, native = PROTECTED, REFUSED, NATIVE_SUFFIXES
+    protected, refused, native, ways = PROTECTED, REFUSED, NATIVE_SUFFIXES, dict(WAYS)
     path_events = types.MappingProxyType(dict(PATH_EVENTS))
     if win:
         import nt
@@ -188,9 +198,8 @@ def make_hook(cfg, stdlib, local_modules, exec_roots):
     def roots(paths):
         return tuple(canon(p) for p in paths)
 
+    # Lecture libre de tout l'espace (CAP-5) et de l'interpréteur ; rien au-delà.
     read_roots = roots(cfg["read_roots"]) + roots(cfg["python_roots"])
-    read_files = roots(cfg["read_files"])
-    list_roots = read_roots + roots((cfg["workspace"],))
     write_roots = roots(cfg["write_roots"])
     code_roots = roots(exec_roots)
 
@@ -200,8 +209,11 @@ def make_hook(cfg, stdlib, local_modules, exec_roots):
                 return base
         return None
 
-    def deny(event, detail):
-        msg = f"\nrun-script : refus ({event} : {detail}), arrêt du script\n"
+    def deny(event, detail, rule="script-refuse"):
+        msg = (
+            f"\nrun-script : refus ({event} : {detail}) ; règle {rule}, permis : {ways[rule]} ;"
+            " arrêt du script\n"
+        )
         try:
             _write(2, msg.encode("utf-8", "replace"))
         except _OSError:
@@ -212,9 +224,8 @@ def make_hook(cfg, stdlib, local_modules, exec_roots):
         if _type(p) is _int:
             return
         c = canon(_fspath(p) if p is not None else ".")
-        bases = list_roots if event in ("os.listdir", "os.scandir") else read_roots
-        if under(c, bases) is None and c not in read_files:
-            deny(event, f"lecture hors des dossiers permis : {c}")
+        if under(c, read_roots) is None:
+            deny(event, f"lecture hors des dossiers permis : {c}", "lecture-hors-espace")
 
     def check_write(event, p):
         if _type(p) is _int:
@@ -222,17 +233,17 @@ def make_hook(cfg, stdlib, local_modules, exec_roots):
         c = canon(_fspath(p))
         base = under(c, write_roots)
         if base is None:
-            deny(event, f"écriture hors de work/ et scripts/ : {c}")
+            deny(event, f"écriture hors de work/ et scripts/ : {c}", "ecriture-hors-liste")
         if _lower(c).endswith(native) or "__pycache__" in c:
-            deny(event, f"fichier de code natif ou compilé : {c}")
+            deny(event, f"fichier de code natif ou compilé : {c}", "ecriture-hors-liste")
         rel = c[_len(base) :]
         if ":" in rel:
             # Flux NTFS (`state.json::$DATA`, `x:flux`) : cible réelle indéterminable ici.
-            deny(event, f"flux de fichier interdit : {c}")
+            deny(event, f"flux de fichier interdit : {c}", "ecriture-hors-liste")
         for part in rel.split(sep):
             # Windows retire points et espaces finaux (`state.json.` est `state.json`).
             if _lower(part).rstrip(". ") in protected:
-                deny(event, f"fichier de séance protégé : {c}")
+                deny(event, f"fichier de séance protégé : {c}", "etat-seance")
 
     def hook(event, args):
         if event.startswith(deny_prefixes):
@@ -240,16 +251,20 @@ def make_hook(cfg, stdlib, local_modules, exec_roots):
         if event == "import":
             name = args[0]
             if _type(name) is not _str:
-                deny(event, "nom de module illisible")
+                deny(event, "nom de module illisible", "import-interdit")
             top = name.partition(".")[0]
             if top in deny_top or top.startswith("_test"):
-                deny(event, f"module {name} interdit")
+                deny(event, f"module {name} interdit", "import-interdit")
             if top == "numpy":
                 if name.startswith(deny_numpy):
-                    deny(event, f"module {name} interdit")
+                    deny(event, f"module {name} interdit", "import-interdit")
                 return
             if top not in stdlib and top not in local_modules:
-                deny(event, f"module {name} hors de la bibliothèque standard, de numpy et scripts/")
+                deny(
+                    event,
+                    f"module {name} hors de la bibliothèque standard, de numpy et scripts/",
+                    "import-interdit",
+                )
             return
         if event == "exec":
             # importlib.import_module ne lève pas d'événement import : le code d'un module se
@@ -260,7 +275,8 @@ def make_hook(cfg, stdlib, local_modules, exec_roots):
             if _type(obj) is _code and obj.co_filename[:1] != "<":
                 c = canon(obj.co_filename)
                 if under(c, code_roots) is None:
-                    deny(event, f"code hors de la bibliothèque standard, numpy et scripts/ : {c}")
+                    detail = f"code hors de la bibliothèque standard, numpy et scripts/ : {c}"
+                    deny(event, detail, "import-interdit")
             return
         if event == "open":
             path, mode, flags = args[0], args[1], args[2]

@@ -280,6 +280,7 @@ def _freeze_locked(directory: Path, session_id: str, original: Path, out) -> dic
         public = public_journal((directory / harness.JOURNAL_FILE).read_bytes())
         journal_sha = _sha(public)
         state = harness.read_state(directory)
+        blocages = _public_blocages(directory)
         diff = {
             "format": FORMAT,
             "session_id": session_id,
@@ -293,9 +294,13 @@ def _freeze_locked(directory: Path, session_id: str, original: Path, out) -> dic
             "files_changed": files,
             "frozen_at": state.updated_at,
         }
+        if blocages is not None:
+            diff["blocages"] = {"file": BLOCAGES_FILE, "sha256": _sha(blocages)}
         text = (json.dumps(diff, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
         _write_atomic(out_dir / harness.JOURNAL_FILE, public)
         _write_atomic(out_dir / VALUES_FILE, values)
+        if blocages is not None:
+            _write_atomic(out_dir / BLOCAGES_FILE, blocages)
         _write_atomic(out_dir / DIFF_FILE, text)
     except (OSError, ValueError, HarnessError) as exc:
         raise FreezeError(f"écriture du diff impossible ({exc}) ; {resume}", 1) from exc
@@ -312,6 +317,21 @@ def _freeze_locked(directory: Path, session_id: str, original: Path, out) -> dic
         },
     )
     return diff
+
+
+BLOCAGES_FILE = "BLOCAGES.md"
+
+
+def _public_blocages(directory: Path) -> bytes | None:
+    """`notes/BLOCAGES.md` de l'espace de la séance (story 2.5), chemins personnels masqués.
+
+    Séance hors d'un espace (`<espace>/sessions/<id>`, à côté de `workspace.json`) : None.
+    """
+    workspace = directory.resolve().parent.parent
+    path = workspace / "notes" / BLOCAGES_FILE
+    if not (workspace / harness.WORKSPACE_FILE).is_file() or not path.is_file():
+        return None
+    return public_text(path.read_text(encoding="utf-8", errors="replace")).encode("utf-8")
 
 
 def _freeze_state(directory: Path) -> None:
