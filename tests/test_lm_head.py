@@ -271,11 +271,15 @@ def test_replayed_batch_and_logits_are_identical_after_detach(tmp_path):
     assert model.lm_head.weight.data_ptr() != model.model.embed_tokens.weight.data_ptr()
     with torch.no_grad():
         assert torch.equal(model(ids).logits, logits_before)
-    # Éditer la sortie d'un jeton ne bouge plus l'embedding d'entrée.
+    # Éditer la sortie d'un jeton ne bouge plus l'embedding d'entrée. Copies : sous Linux, le
+    # modèle chargé peut rester projeté en mémoire sur le fichier réécrit sur place.
+    embed_before = model.model.embed_tokens.weight.detach().clone()
+    head_before = model.lm_head.weight.detach().clone()
+    del model
     set_values(work, "lm_head.weight", {3: 5.0}, col=2)
     edited = LlamaForCausalLM.from_pretrained(work)
-    assert torch.equal(edited.model.embed_tokens.weight, model.model.embed_tokens.weight)
-    assert not torch.equal(edited.lm_head.weight, model.lm_head.weight)
+    assert torch.equal(edited.model.embed_tokens.weight, embed_before)
+    assert not torch.equal(edited.lm_head.weight, head_before)
 
 
 # --- Critères 4 et 5 : gel et rejeu -------------------------------------------------------------
