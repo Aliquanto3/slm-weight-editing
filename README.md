@@ -143,7 +143,7 @@ La séance se déroule dans un espace hors du dépôt, protégé par trois couch
    uv run slm-weight-editing audit-session <transcription>.jsonl --workspace %USERPROFILE%\seances\s1 --session-dir %USERPROFILE%\seances\s1\sessions\s1 --reference-from <checkpoint de la révision publiée> --base-revision <révision> --write-reference <référence>.json
    ```
 
-   `--workspace`, `--session-dir` et la référence (`--reference` ou `--reference-from`) sont obligatoires ; la base de la ligne `open` est comparée à la révision publiée (tenseurs et autres fichiers). Code 0 : aucune violation ; code 1 : violations, une par ligne (`fichier:ligne · règle · outil · détail`) ; code 2 : entrée illisible. Toute commande hors liste blanche, toute lecture hors de l'espace, toute transcription vide et tout script refusé par `run-script` font échouer l'audit ; les copies des scripts lancés sont auditées comme le reste.
+   `--workspace`, `--session-dir` et la référence (`--reference` ou `--reference-from`) sont obligatoires ; la base de la ligne `open` est comparée à la révision publiée (tenseurs et autres fichiers). Code 0 : aucune violation ; code 1 : violations, une par ligne (`fichier:ligne · règle · outil · détail`) ; code 2 : aucune violation mais une section « À relire » (copies de scripts à boucle de décodage ou tirage, suites d'au moins 3 appels `probe` qui prolongent de 1 à 4 jetons le précédent ; `--json` donne `violations` et `a_relire`) ; code 3 : entrée illisible. Toute commande hors liste blanche, toute lecture hors de l'espace, toute transcription vide et tout script refusé par `run-script` font échouer l'audit ; les copies des scripts lancés sont auditées comme le reste.
 
 ## Poste de séance avec GPU
 

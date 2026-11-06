@@ -20,6 +20,8 @@ Faux positifs à relire à la main ; limites : fiche de la story 5.
 from __future__ import annotations
 
 import argparse
+import ast
+import dataclasses
 import hashlib
 import json
 import os
@@ -30,6 +32,8 @@ import sys
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
+
+from slm_weight_editing import audit_decode
 
 RULES = {
     "transcription": "ligne de transcription illisible (JSON invalide)",
@@ -60,6 +64,7 @@ RULES = {
     "journal-seance": "ligne open du journal absente, multiple ou illisible",
     "base-differente": "séance ouverte sur une base qui diffère de la révision publiée",
     "import-interdit": "module ou code hors de la bibliothèque standard, de numpy et de scripts/",
+    audit_decode.RULE: "décodage autorégressif possible (liste à relire, ne fait pas échouer)",
 }
 
 # Voie permise de chaque règle (story 2.5, CAP-6) : un refus vu par l'éditeur dit la règle et ce
@@ -96,6 +101,7 @@ ALLOWED_WAYS = {
     "base-differente": "rien à faire côté éditeur (audit d'Anaël)",
     "import-interdit": "numpy, safetensors.numpy, bibliothèque standard ; modèle par run-batch "
     "ou probe",
+    audit_decode.RULE: "génération par run-batch seulement ; ni probe ni script ne génère",
 }
 
 
@@ -110,6 +116,7 @@ ALLOWED_INTERNAL_MODULES: tuple[str, ...] = ()
 # Outils de séance ; tout autre outil (WebFetch, WebSearch, Agent, Skill, mcp__*...) échoue.
 FILE_READ_TOOLS = {"Read", "Grep", "Glob", "LSP"}
 FILE_WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
+_FRAGMENT_TOOLS = {"Edit", "MultiEdit", "NotebookEdit"}  # contenu partiel du fichier
 SHELL_TOOLS = {"Bash", "PowerShell"}
 NEUTRAL_TOOLS = {"TodoWrite", "AskUserQuestion", "ToolSearch", "EnterPlanMode", "ExitPlanMode"}
 WEB_TOOLS = {"WebFetch", "WebSearch"}
@@ -165,10 +172,13 @@ _NETWORK = re.compile(
 )
 _OBFUSCATION = re.compile(
     r"base64|-encodedcommand|\s-e(?:nc?)?\s+[a-z0-9+/=]{16,}|\beval\b|\biex\b|invoke-expression"
-    r"|\bexec\s*\(|__import__|importlib|\bcompile\s*\(|codecs\.decode|bytes\.fromhex|\[char\]"
-    r"|\bchr\s*\(|rot13|\bxxd\b|start-process|subprocess|os\.system|os\.popen|os\.exec|\bpty\b"
+    r"|\bexec\s*\(|__import__|importlib|(?<!\bre\.)(?<!\bregex\.)\bcompile\s*\(|codecs\.decode"
+    r"|\[char\]|rot13|\bxxd\b|start-process|subprocess|os\.system|os\.popen|os\.exec|\bpty\b"
     r"|\bctypes\b|\bmarshal\b|\bpickle\b"
 )
+# Décodage d'octets (table `bytes_to_unicode` du tokenizer) : accepté dans le code (copies de
+# scripts, Write/Edit), refusé dans une commande shell (story 2.6, CAP-9).
+_BYTE_DECODING = re.compile(r"\bchr\s*\(|bytes\.fromhex")
 _GIT = re.compile(r"(?:^|[\s;|&(])(?:git|gh)(?:\.exe)?(?=\s|$)")
 _INSTALL = re.compile(
     r"\bpip3?\b|\buv\s+(?:add|pip|sync|tool|lock|remove)\b|\buvx\b|\bconda\b|\bwinget\b"
@@ -181,7 +191,7 @@ _WRITE_VERB = re.compile(
     r"|\btee\b|tee-object|\btruncate\b|\btouch\b|\bsed\b[^|;&]*\s-i|\bperl\b[^|;&]*\s-[a-z]*i"
     r"|\bdd\b|>|\bunlink\b|\bshred\b|\bchmod\b|\battrib\b|\bicacls\b|\bln\b|mklink|robocopy"
     r"|xcopy|\.write|os\.remove|os\.replace|os\.rename|shutil|rmtree|\.unlink"
-    r"|\.rename|\.replace\s*\(|\.touch|write_text|write_bytes|json\.dump|\bsave\w*\s*\("
+    r"|\.rename|\.replace\s*\(|\.touch|write_text|write_bytes|json\.dump\b|\bsave\w*\s*\("
 )
 _DELETE_VERB = re.compile(
     r"\brm\b|\brmdir\b|\bdel\b|\berase\b|\brd\b|remove-item|\bri\b|rmtree|shutil|\bmv\b"
@@ -334,7 +344,345 @@ def _open_writes(text: str) -> bool:
         mode = keyword[0] if keyword else (positional[index] if len(positional) > index else "")
         if mode and not _READ_MODE.match(mode):
             return True
-    return False
+    # `[^)]*` s'arrête à la première parenthèse : `open(Path(j).resolve(), "a")` passe à travers.
+    return any(
+        isinstance(node, ast.Call) and _open_mode_reads(node) is False
+        for tree in _parse_trees(text)
+        for node in ast.walk(tree)
+    )
+
+
+def _parse_one(source: str) -> ast.AST | None:
+    for candidate in (source, source + "\n    pass"):
+        try:
+            return ast.parse(candidate)
+        except SyntaxError, ValueError, RecursionError, MemoryError:
+            continue
+    return None
+
+
+def _parse_trees(text: str) -> list[ast.AST]:
+    """Arbre du texte entier, sinon de chaque ligne analysable (fragment d'Edit, code cassé)."""
+    whole = _parse_one(text) if "\n" in text.strip() else None
+    if whole is not None:
+        return [whole]
+    return [t for line in text.split("\n") if (t := _parse_one(line.strip())) is not None]
+
+
+_TABLE_READS = {"read_json", "read_csv", "read_parquet", "read_table"}  # pandas
+_READ_CALLS = {"open", "read_text", "read_bytes", *_TABLE_READS}
+# Valeur d'une affectation qui ne lie pas un chemin : le résultat d'une lecture.
+_READ_RESULTS = _READ_CALLS | {"read", "readline", "readlines", "load", "loads", "splitlines"}
+# Seuls appels admis sur une ligne de lecture : tout autre appel (`os.link`, `sqlite3.connect`,
+# `map(f, ...)`) peut écrire ou lier le chemin lu, la ligne reste alors comptée.
+_HARMLESS_CALLS = _READ_RESULTS | {
+    "Path",
+    "PurePath",
+    "print",
+    "len",
+    "list",
+    "sorted",
+    "str",
+    "int",
+    "float",
+    "bool",
+    "dict",
+    "set",
+    "tuple",
+    "enumerate",
+    "zip",
+    "range",
+    "min",
+    "max",
+    "sum",
+    "any",
+    "all",
+    "decode",
+    "encode",
+    "strip",
+    "rstrip",
+    "lstrip",
+    "split",
+    "rsplit",
+    "lower",
+    "upper",
+    "startswith",
+    "endswith",
+    "get",
+    "items",
+    "keys",
+    "values",
+    "count",
+    "index",
+    "find",
+    "format",
+    "join",
+    "exists",
+    "is_file",
+    "is_dir",
+    "resolve",
+    "append",
+    "extend",
+    "isinstance",
+    "repr",
+    "abs",
+    "round",
+    "reversed",
+    "dumps",
+}
+_OPEN_KEYWORDS = {"mode", "buffering", "encoding", "errors", "newline"}
+_BINDERS = (
+    ast.FunctionDef,
+    ast.AsyncFunctionDef,
+    ast.ClassDef,
+    ast.Lambda,
+    ast.Import,
+    ast.ImportFrom,
+    ast.Global,
+    ast.Nonlocal,
+    ast.Delete,
+    ast.NamedExpr,
+)
+
+
+_OPEN_MODULES = {"io", "codecs", "gzip", "bz2", "lzma", "os"}
+_PATH_READS = {"read_text", "read_bytes", "open", "exists", "is_file", "is_dir"}
+# Le fichier ouvert reste joignable par son nom (`f.name`, `f.fileno()`), un nom par `globals()` :
+# aucune ligne n'est alors allégée.
+_NO_EXEMPTION = re.compile(
+    r"\.\s*(?:name|fileno|buffer|raw)\b|\bsys\s*\.\s*modules\b"
+    r"|\b(?:globals|locals|vars|getattr|setattr|delattr|__dict__|__main__|_getframe|f_globals"
+    r"|f_locals|f_back|inspect|gc)\b"
+)
+_SHADOWED = r"(?:open|print|Path|PurePath|io|codecs|gzip|bz2|lzma|os|json|np|numpy|pd|pandas)"
+# Redéfinition d'un nom dont l'allègement suppose le sens habituel (`print = lambda p: ...`).
+_SHADOWING = re.compile(
+    rf"\b(?:def|class)\s+{_SHADOWED}\b"
+    rf"|(?<!\bimport numpy )(?<!\bimport pandas )\bas\s+{_SHADOWED}\b"
+    rf"|\b{_SHADOWED}\s*(?:\[[^\]\n]*\])?\s*(?::=|[-+*/|&^%@]?=(?!=))"
+    rf"|\b{_SHADOWED}\s*,[^=\n()]*=(?!=)"
+    rf"|\bfor\s+(?:(?!\bin\b)[\w\s,()])*\b{_SHADOWED}\b(?:(?!\bin\b)[\w\s,()])*\bin\b"
+    rf"|\b(?:global|nonlocal)\s+[\w\s,]*\b{_SHADOWED}\b"
+    rf"|\blambda\b[^:\n]*\b{_SHADOWED}\b[^:\n]*:"
+    rf"|\bdef\s+\w+\s*\([^)]*\b{_SHADOWED}\b"
+    r"|\bimport\b[^\n#]*\b(?:open|print)\b"
+    r"|\bfrom\s+(?!pathlib\b)\S+\s+import\b[^\n#]*\b(?:Path|PurePath)\b|\bimport\s*\*"
+    # Méthode homonyme d'un appel admis : `Path.read_text = ...`, `def read(self)`.
+    rf"|\bdef\s+(?:{'|'.join(sorted(_HARMLESS_CALLS))})\b"
+    rf"|\.\s*(?:{'|'.join(sorted(_HARMLESS_CALLS))}|__\w+__)\s*(?::=|[-+*/|&^%@]?=(?!=))"
+)
+
+
+def _open_mode_reads(call: ast.Call) -> bool | None:
+    """Vrai si l'appel `open` est prouvé en lecture, faux s'il peut écrire, None si pas un open."""
+    func = call.func
+    if isinstance(func, ast.Name) and func.id == "open":
+        index = 1
+    elif isinstance(func, ast.Attribute) and func.attr == "open":
+        module = func.value.id if isinstance(func.value, ast.Name) else ""
+        if module == "os":  # drapeaux : seul `os.O_RDONLY` seul est une lecture
+            flags = call.args[1] if len(call.args) > 1 else None
+            return (
+                isinstance(flags, ast.Attribute)
+                and flags.attr == "O_RDONLY"
+                and isinstance(flags.value, ast.Name)
+                and flags.value.id == "os"
+                and not call.keywords
+            )
+        index = 1 if module in {"io", "codecs", "gzip", "bz2", "lzma"} else 0
+    else:
+        return None
+    mode = next((k.value for k in call.keywords if k.arg == "mode"), None)
+    if mode is None and len(call.args) > index:
+        mode = call.args[index]
+    if (
+        any(k.arg not in _OPEN_KEYWORDS for k in call.keywords)  # `opener=`, `**kw`
+        or any(isinstance(a, ast.Starred) for a in call.args)
+        or len(call.args) > index + 2  # `opener` en position 8 : repli prudent
+    ):
+        return False
+    if mode is None:
+        return True
+    return (
+        isinstance(mode, ast.Constant)
+        and isinstance(mode.value, str)
+        and set(mode.value) <= set("rbtu")
+    )
+
+
+def _call_name(call: ast.Call) -> str:
+    func = call.func
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return func.id if isinstance(func, ast.Name) else ""
+
+
+def _plain_names(target: ast.expr) -> bool:
+    if isinstance(target, ast.Tuple | ast.List):
+        return all(_plain_names(t) for t in target.elts)
+    return isinstance(target, ast.Name)
+
+
+def _mmap_reads(call: ast.Call) -> bool:
+    """`np.load` sans projection en écriture (`mmap_mode` absent, "r" ou "c")."""
+    mode = next((k.value for k in call.keywords if k.arg == "mmap_mode"), None)
+    if mode is None and len(call.args) > 1:
+        mode = call.args[1]
+    if any(k.arg is None for k in call.keywords) or any(
+        isinstance(a, ast.Starred) for a in call.args
+    ):
+        return False
+    return mode is None or (isinstance(mode, ast.Constant) and mode.value in {None, "r", "c"})
+
+
+def _consumed(call: ast.Call) -> list[ast.AST]:
+    """Arguments qui ne sortent pas de l'appel : chemin d'une lecture, valeur affichée."""
+    func = call.func
+    if isinstance(func, ast.Name) and func.id == "print":
+        if all(k.arg in {"sep", "end", "flush"} for k in call.keywords):  # pas de `file=`
+            return [*call.args, *(k.value for k in call.keywords)]
+        return []
+    if _open_mode_reads(call) is True and call.args:
+        if isinstance(func, ast.Name) or (
+            isinstance(func.value, ast.Name) and func.value.id in _OPEN_MODULES
+        ):
+            return [call.args[0]]
+    module = (
+        func.value.id
+        if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name)
+        else ""
+    )
+    if call.args and (
+        (module in {"pd", "pandas"} and func.attr in _TABLE_READS)
+        or (module in {"np", "numpy"} and func.attr == "load" and _mmap_reads(call))
+    ):
+        return [call.args[0]]
+    if isinstance(func, ast.Attribute) and func.attr in _PATH_READS:
+        if func.attr == "open" and _open_mode_reads(call) is not True:
+            return []
+        path = func.value
+        if isinstance(path, ast.Name):  # `J.read_text()` : J lié à un chemin (`_path_binding`)
+            return [path]
+        if (
+            isinstance(path, ast.Call)
+            and isinstance(path.func, ast.Name)
+            and path.func.id in {"Path", "PurePath"}
+            and not path.keywords
+        ):
+            return list(path.args)
+    return []
+
+
+def _read_line_rest(line: str, need_read: bool = True) -> str | None:
+    """Ligne prouvée en lecture seule (AST), chemins lus et valeurs affichées effacés ; sinon None.
+
+    Une seule instruction ; chaque appel dans une liste blanche, chaque `open` en mode de lecture
+    littéral ; affectations à des noms seulement ; ni `def`, `lambda`, `import` ni `:=`. Le reste
+    rendu garde tout chemin qui n'est pas l'argument d'une lecture (`[(Path(j), l) for l in
+    open(j)]`, `paths.append(Path(j))`) : le nom protégé y reste visible.
+    """
+    source = line.strip()
+    tree = _parse_one(source)
+    if tree is None or len(tree.body) != 1:
+        return None
+    reads = False
+    spans: list[tuple[int, int]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, _BINDERS):
+            return None
+        if isinstance(node, ast.Call):
+            mode_reads = _open_mode_reads(node)
+            if mode_reads is False:
+                return None
+            name = _call_name(node)
+            if name not in _HARMLESS_CALLS:
+                return None
+            reads = reads or bool(mode_reads) or name in _READ_CALLS
+            spans += [
+                (a.col_offset, a.end_col_offset)
+                for a in _consumed(node)
+                if a.lineno == 1 and a.end_lineno == 1 and a.end_col_offset is not None
+            ]
+        elif isinstance(node, ast.Assign | ast.AugAssign | ast.AnnAssign):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if not all(_plain_names(t) for t in targets):
+                return None  # `d["state.json"] = ...`, `x.p = ...`
+    if need_read and not reads:
+        return None
+    raw = bytearray(source.encode("utf-8"))  # décalages de l'AST en octets UTF-8
+    for start, end in spans:
+        raw[start:end] = b" " * (end - start)
+    return raw.decode("utf-8", errors="replace")
+
+
+def _path_binding(line: str) -> str | None:
+    """Nom lié à un chemin construit de littéraux (`j = "journal.jsonl"`, `J = Path(d) / "x"`)."""
+    tree = _parse_one(line.strip())
+    if tree is None or len(tree.body) != 1 or not isinstance(tree.body[0], ast.Assign):
+        return None
+    stmt = tree.body[0]
+    if len(stmt.targets) != 1 or not isinstance(stmt.targets[0], ast.Name):
+        return None
+    for node in ast.walk(stmt.value):
+        if isinstance(node, ast.Call):
+            if not (isinstance(node.func, ast.Name) and node.func.id in {"Path", "PurePath"}):
+                return None
+        elif not isinstance(
+            node,
+            ast.Constant
+            | ast.Name
+            | ast.JoinedStr
+            | ast.FormattedValue
+            | ast.BinOp
+            | ast.Add
+            | ast.Div
+            | ast.Load,
+        ):
+            return None
+    return stmt.targets[0].id
+
+
+def _without_read_lines(text: str, bindings: bool = True) -> str:
+    """Code où chaque ligne prouvée en lecture seule ne garde que ce qui n'est pas lu ou affiché.
+
+    Un script peut lire le journal et écrire ailleurs (CAP-9) : le nom protégé n'est retenu que
+    là où il peut servir à écrire. Un nom lié au chemin (`j = "journal.jsonl"`) n'est oublié que
+    si chacun de ses autres emplois est l'argument d'une lecture ou d'un `print`. Repli prudent :
+    une ligne que l'AST ne prouve pas en lecture (`open` sur plusieurs lignes, mode variable,
+    appel hors liste) reste comptée, et aucune ligne n'est allégée si le texte accède au nom
+    du fichier ouvert (`f.name`), aux noms dynamiquement (`globals()`) ou redéfinit `open`,
+    `print` ou `Path`. Un fragment (`Edit`) ne montre pas tout le fichier : `bindings` faux, ses
+    liaisons restent comptées, comme une liaison sans autre emploi dans le texte.
+    """
+    lines = text.split("\n")
+    if _NO_EXEMPTION.search(text) or _SHADOWING.search(text):
+        return text
+    rests = [
+        None if _WRITE_VERB.search(normalize(line)) else _read_line_rest(line) for line in lines
+    ]
+    kept = [line if rest is None else rest for line, rest in zip(lines, rests, strict=True)]
+    for i, line in enumerate(lines):
+        # Seules les liaisons d'un nom protégé comptent : O(liaisons protégées × lignes).
+        if rests[i] is not None or not bindings or not _mentions_protected(normalize(line), False):
+            continue
+        name = _path_binding(line)
+        if name is None or _WRITE_VERB.search(normalize(line)):
+            continue
+        uses = re.compile(rf"\b{re.escape(name)}\b")
+        if not bindings or not any(uses.search(o) for j, o in enumerate(lines) if j != i):
+            continue
+        if all(
+            not uses.search(other)
+            or (
+                not _WRITE_VERB.search(normalize(other))
+                and (rest := _read_line_rest(other, need_read=False)) is not None
+                and not uses.search(rest)
+            )
+            for j, other in enumerate(lines)
+            if j != i
+        ):
+            kept[i] = ""
+    return "\n".join(kept)
 
 
 def _check_code(text: str, tool: str, shell: bool) -> list[tuple[str, str]]:
@@ -373,7 +721,7 @@ def _check_code(text: str, tool: str, shell: bool) -> list[tuple[str, str]]:
     m = _NETWORK.search(norm)
     if m:
         found.append(("web", f"« {m.group(0).strip()} »"))
-    m = _OBFUSCATION.search(norm)
+    m = _OBFUSCATION.search(norm) or (_BYTE_DECODING.search(norm) if shell else None)
     if m:
         found.append(("obfuscation", f"« {m.group(0).strip()} »"))
     if shell:
@@ -389,6 +737,10 @@ def _check_code(text: str, tool: str, shell: bool) -> list[tuple[str, str]]:
     if reason:
         found.append(("lecture-interdite", reason))
     if _WRITE_VERB.search(stripped) or _open_writes(text):
+        if not shell:
+            stripped = _HARMLESS_REDIRECT.sub(
+                " ", normalize(_without_read_lines(text, tool not in _FRAGMENT_TOOLS))
+            )
         target = _mentions_protected(stripped, shell)
         if target:
             found.append(("etat-seance", f"écriture visant « {target} »"))
@@ -1061,7 +1413,9 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
         description=(
             "Échoue (code 1) sur toute commande hors liste blanche, lecture hors de l'espace, "
             "accès web, exécution du modèle hors du harnais, écriture de l'état de séance, "
-            "script refusé par run-script ou base différente de la révision publiée."
+            "script refusé par run-script ou base différente de la révision publiée. "
+            "Code 2 : aucune violation, mais des copies de scripts ou des suites de probes à "
+            "relire (décodage autorégressif possible) ; code 3 : erreur d'entrée."
         ),
     )
     p.add_argument("transcripts", nargs="+", help="transcription(s) JSONL de la séance")
@@ -1075,6 +1429,9 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
         "--reference-from", help="checkpoint de la révision publiée, dont on calcule les sha256"
     )
     p.add_argument("--base-revision", help="révision attendue de la base (ligne open)")
+    p.add_argument(
+        "--json", action="store_true", help="sortie JSON : violations et liste « à relire »"
+    )
     p.add_argument("--write-reference", help="écrit la référence calculée par --reference-from")
     p.add_argument(
         "--repo",
@@ -1097,10 +1454,10 @@ def run(args: argparse.Namespace) -> int:
         missing = [f for f in files if not f.is_file()]
         if missing:
             print(f"Erreur : transcription introuvable : {missing[0]}", file=sys.stderr)
-            return 2
+            return 3
         if not (Path(args.session_dir) / "journal.jsonl").is_file():
             print(f"Erreur : journal introuvable dans {args.session_dir}", file=sys.stderr)
-            return 2
+            return 3
         session_id = Path(args.session_dir).resolve().name
         violations = [
             v
@@ -1111,14 +1468,30 @@ def run(args: argparse.Namespace) -> int:
         violations += audit_scripts(args.session_dir)
         violations += audit_batches(args.session_dir, args.workspace)
         violations += audit_workspace_links(args.workspace)
+        candidates = audit_decode.review_candidates(args.session_dir, args.workspace)
     except (OSError, ValueError) as exc:
         print(f"Erreur : {exc}", file=sys.stderr)
-        return 2
+        return 3
+    code = 1 if violations else 2 if candidates else 0
+    if args.json:
+        report = {
+            "exit": code,
+            "violations": [dataclasses.asdict(v) for v in violations],
+            "a_relire": [c.to_json() for c in candidates],
+        }
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return code
     for v in violations:
         print(v.render())
     if violations:
         rules = sorted({v.rule for v in violations})
         print(f"Audit en échec : {len(violations)} violation(s) ({', '.join(rules)})")
-        return 1
-    print(f"Audit réussi : {len(files)} transcription(s), aucune violation")
-    return 0
+    elif not candidates:
+        print(f"Audit réussi : {len(files)} transcription(s), aucune violation")
+    else:
+        print(f"Audit sans violation : {len(files)} transcription(s), mais des éléments à relire")
+    if candidates:
+        print(f"À relire ({len(candidates)}, {audit_decode.RULE}) :")
+        for c in candidates:
+            print(f"  {c.render()}")
+    return code
