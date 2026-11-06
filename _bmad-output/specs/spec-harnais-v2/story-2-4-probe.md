@@ -1,5 +1,5 @@
 ---
-status: review
+status: done
 story: "2.4"
 title: Commande probe et budget de probe (CAP-1)
 ---

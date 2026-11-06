@@ -1,5 +1,5 @@
 ---
-status: review
+status: done
 story: "2.5"
 title: Espace de séance, lecture libre, OPERATEUR.md, refus expliqués, BLOCAGES.md (CAP-4, CAP-5, CAP-6, consigne de CAP-3)
 ---

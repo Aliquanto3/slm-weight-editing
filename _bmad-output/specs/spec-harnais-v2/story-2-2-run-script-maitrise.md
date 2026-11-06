@@ -1,5 +1,5 @@
 ---
-status: review
+status: done
 story: "2.2"
 title: run-script maîtrisé, threads, délai, sortie en fichier (CAP-8)
 ---
