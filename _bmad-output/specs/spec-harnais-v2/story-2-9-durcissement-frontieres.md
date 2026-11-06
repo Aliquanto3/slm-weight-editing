@@ -1,5 +1,5 @@
 ---
-status: ready
+status: review
 story: "2.9"
 title: Durcissement des frontières 2.5/2.6/2.8 (constats A-12 ; CAP-6, CAP-9, CAP-10)
 ---
@@ -75,3 +75,14 @@ Aujourd'hui `_check_code` ne cherche une cible protégée que si `_WRITE_VERB` o
 
 1. Le crochet passe en échec fermé (critères 4 à 6) : cela annule la décision 2 de la fiche 2.5, que tu avais validée. Une panne du crochet bloque alors toute la séance jusqu'à ton intervention. D'accord ?
 2. Critère 14 : reprise automatique avec message, ou refus de la commande tant que `detach-bak/` existe ? Recommandé : reprise avec message pour les quatre. Un refus ne laisse à l'éditeur que `detach-lm-head`, qui reprend puis détache : il serait poussé à délier sans l'avoir choisi.
+
+## Réalisation (dev-story, 2026-11-06)
+
+Tests : `tests/test_durcissement_frontieres.py`, un test (ou groupe paramétré) par critère, nommés `test_cN_…` ; tests réalignés dans `tests/test_espace_lecture.py` (entrée malformée et `workspace.json` absent : `deny crochet-en-echec` ; bloc du crochet avec `onFailure`).
+
+- Point 1 : dans le code (hors shell), plus de condition de verbe ; toute mention d'une cible d'état de séance donne `etat-seance`. Les lignes prouvées en lecture seule par l'AST (`open(p).read()`, `Path(p).read_text()`, `print`…) restent allégées, comme avant : sans cela, les scripts d'analyse de CAP-9 (`LEGIT_ANALYSIS_SCRIPTS`) seraient refusés et `_SHADOWING` (critères 7 et 8) ne servirait plus. Lecture non prouvée (`pathlib.Path(p).open().read()`) : désormais refusée (test déplacé dans les cas refusés).
+- Point 2 : `_refusal_hook.main` analyse dans un fil démon borné par `DEADLINE` (6 s, sous `HOOK_TIMEOUT` = 10 s) ; exception, entrée illisible ou échéance : `deny crochet-en-echec` + rappel BLOCAGES ; sortie impossible : code 2. `_SHADOWING` découpé en un motif à essais bornés et des segments possessifs (`_shadows`), équivalence vérifiée sur 300 000 chaînes aléatoires contre l'ancien motif. `_without_read_lines` n'analyse plus que les lignes qui nomment l'état de séance. Seuil du critère 7 : 0,5 s, ×3 si `CI` est posé.
+- Point 3 : `_is_prose` (EDITION.md, `notes/` hors `.py`, `.pyw`, `.pyc`, `.pth`, `.ipynb`…) : règles de chemin seulement. Un fichier de code hors de `scripts/` est `ecriture-hors-liste`. Ajout : `sys.path`, `meta_path`, `path_hooks`, `PYTHONPATH`, `from sys import path` donnent `obfuscation` dans le code.
+- Point 4 : `READ_PATH_KEYS` = `file_path`, `path`, `notebook_path`, `filePath`.
+- Point 5 : `lm_head.recover_interrupted` + `harness.recover_detach` (import local, message `Reprise : …` sur stderr), appelé sous le verrou par `session-unlock` (sous le verrou mort, ou un verrou pris s'il n'y en a pas), `session-freeze`, `run-batch` et `probe`. Après une erreur, `detach_lm_head` relit le journal : ligne présente, la sauvegarde part sans restaurer ; journal illisible, rien n'est touché.
+- Reports : la phrase de `CONSIGNE.md` « tout ce dossier se lit librement… par tes scripts » reste vraie pour les lectures prouvées mais ne dit pas qu'une autre mention de l'état de séance est refusée : à préciser dans une story de doc.

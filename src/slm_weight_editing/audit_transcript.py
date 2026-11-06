@@ -64,6 +64,8 @@ RULES = {
     "journal-seance": "ligne open du journal absente, multiple ou illisible",
     "base-differente": "séance ouverte sur une base qui diffère de la révision publiée",
     "import-interdit": "module ou code hors de la bibliothèque standard, de numpy et de scripts/",
+    "crochet-en-echec": "crochet de refus en échec (exception, entrée illisible, analyse trop "
+    "longue) : appel refusé par prudence",
     audit_decode.RULE: "décodage autorégressif possible (liste à relire, ne fait pas échouer)",
 }
 
@@ -101,6 +103,7 @@ ALLOWED_WAYS = {
     "base-differente": "rien à faire côté éditeur (audit d'Anaël)",
     "import-interdit": "numpy, safetensors.numpy, bibliothèque standard ; modèle par run-batch "
     "ou probe",
+    "crochet-en-echec": f"refais l'appel plus simple ou plus court ; sinon {_NOTE}",
     audit_decode.RULE: "génération par run-batch seulement ; ni probe ni script ne génère",
 }
 
@@ -115,6 +118,8 @@ ALLOWED_SUBCOMMANDS = ("run-batch", "session-status", "run-script", "probe", "de
 ALLOWED_INTERNAL_MODULES: tuple[str, ...] = ()
 # Outils de séance ; tout autre outil (WebFetch, WebSearch, Agent, Skill, mcp__*...) échoue.
 FILE_READ_TOOLS = {"Read", "Grep", "Glob", "LSP"}
+# Clés de chemin des outils de lecture (`filePath` : outil LSP, story 2.9).
+READ_PATH_KEYS = ("file_path", "path", "notebook_path", "filePath")
 FILE_WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 _FRAGMENT_TOOLS = {"Edit", "MultiEdit", "NotebookEdit"}  # contenu partiel du fichier
 SHELL_TOOLS = {"Bash", "PowerShell"}
@@ -455,22 +460,52 @@ _NO_EXEMPTION = re.compile(
     r"|f_locals|f_back|inspect|gc)\b"
 )
 _SHADOWED = r"(?:open|print|Path|PurePath|io|codecs|gzip|bz2|lzma|os|json|np|numpy|pd|pandas)"
+_ASSIGN_OP = r"(?::=|[-+*/|&^%@]?=(?!=))"
 # Redéfinition d'un nom dont l'allègement suppose le sens habituel (`print = lambda p: ...`).
+# Formes à motif borné : un essai court par position, temps linéaire.
 _SHADOWING = re.compile(
     rf"\b(?:def|class)\s+{_SHADOWED}\b"
     rf"|(?<!\bimport numpy )(?<!\bimport pandas )\bas\s+{_SHADOWED}\b"
-    rf"|\b{_SHADOWED}\s*(?:\[[^\]\n]*\])?\s*(?::=|[-+*/|&^%@]?=(?!=))"
-    rf"|\b{_SHADOWED}\s*,[^=\n()]*=(?!=)"
-    rf"|\bfor\s+(?:(?!\bin\b)[\w\s,()])*\b{_SHADOWED}\b(?:(?!\bin\b)[\w\s,()])*\bin\b"
-    rf"|\b(?:global|nonlocal)\s+[\w\s,]*\b{_SHADOWED}\b"
-    rf"|\blambda\b[^:\n]*\b{_SHADOWED}\b[^:\n]*:"
-    rf"|\bdef\s+\w+\s*\([^)]*\b{_SHADOWED}\b"
-    r"|\bimport\b[^\n#]*\b(?:open|print)\b"
-    r"|\bfrom\s+(?!pathlib\b)\S+\s+import\b[^\n#]*\b(?:Path|PurePath)\b|\bimport\s*\*"
+    rf"|\b{_SHADOWED}\s*{_ASSIGN_OP}"
+    r"|\bimport\s*\*"
     # Méthode homonyme d'un appel admis : `Path.read_text = ...`, `def read(self)`.
     rf"|\bdef\s+(?:{'|'.join(sorted(_HARMLESS_CALLS))})\b"
-    rf"|\.\s*(?:{'|'.join(sorted(_HARMLESS_CALLS))}|__\w+__)\s*(?::=|[-+*/|&^%@]?=(?!=))"
+    rf"|\.\s*(?:{'|'.join(sorted(_HARMLESS_CALLS))}|__\w+__)\s*{_ASSIGN_OP}"
 )
+_SHADOWED_WORD = re.compile(rf"\b{_SHADOWED}\b")
+# Formes à segment (`for … in`, `lambda … :`, `open, x = …`, `global …`, `def f(…`, `import …`,
+# `open[…] = …`) : début et segment possessif, suite exigée en fin de segment (ou None), nom
+# cherché dans le groupe 1 (ou None). Le segment s'arrête sur une condition qui ne dépend pas de
+# son début : un début compris dans le segment d'un autre s'arrête au même endroit, `finditer`
+# le saute sans rien perdre et chaque caractère est lu un nombre borné de fois (story 2.9 :
+# l'ancienne alternative unique revenait en arrière en temps quadratique).
+_SHADOWING_SEGMENTS = (
+    (re.compile(r"\bfor\s+((?:(?!\bin\b)[\w\s,()])*+)"), re.compile(r"\bin\b"), _SHADOWED_WORD),
+    (re.compile(r"\blambda\b([^:\n]*+)"), re.compile(":"), _SHADOWED_WORD),
+    (re.compile(rf"\b{_SHADOWED}\s*,[^=\n()]*+"), re.compile("=(?!=)"), None),
+    (re.compile(r"\b(?:global|nonlocal)\s+([\w\s,]*+)"), None, _SHADOWED_WORD),
+    (re.compile(r"\bdef\s+\w+\s*\(([^)]*+)"), None, _SHADOWED_WORD),
+    (re.compile(r"\bimport\b([^\n#]*+)"), None, re.compile(r"\b(?:open|print)\b")),
+    (
+        re.compile(r"\bfrom\s+(?!pathlib\b)\S+\s+import\b([^\n#]*+)"),
+        None,
+        re.compile(r"\b(?:Path|PurePath)\b"),
+    ),
+    (re.compile(rf"\b{_SHADOWED}\s*\[[^\]\n]*+"), re.compile(rf"\]\s*{_ASSIGN_OP}"), None),
+)
+
+
+def _shadows(text: str) -> bool:
+    """Vrai si le texte redéfinit un nom dont l'allègement des lectures suppose le sens habituel."""
+    if _SHADOWING.search(text):
+        return True
+    for segment, after, inner in _SHADOWING_SEGMENTS:
+        for m in segment.finditer(text):
+            if after is not None and not after.match(text, m.end()):
+                continue
+            if inner is None or inner.search(text, m.start(1), m.end(1)):
+                return True
+    return False
 
 
 def _open_mode_reads(call: ast.Call) -> bool | None:
@@ -655,15 +690,19 @@ def _without_read_lines(text: str, bindings: bool = True) -> str:
     liaisons restent comptées, comme une liaison sans autre emploi dans le texte.
     """
     lines = text.split("\n")
-    if _NO_EXEMPTION.search(text) or _SHADOWING.search(text):
+    if _NO_EXEMPTION.search(text) or _shadows(text):
         return text
+    # Seules les lignes qui nomment l'état de séance sont analysées (AST) : une ligne sans nom
+    # protégé reste telle quelle, sans effet sur le constat (story 2.9 : temps borné).
+    named = [_mentions_protected(normalize(line), False) is not None for line in lines]
     rests = [
-        None if _WRITE_VERB.search(normalize(line)) else _read_line_rest(line) for line in lines
+        None if not mention or _WRITE_VERB.search(normalize(line)) else _read_line_rest(line)
+        for line, mention in zip(lines, named, strict=True)
     ]
     kept = [line if rest is None else rest for line, rest in zip(lines, rests, strict=True)]
     for i, line in enumerate(lines):
         # Seules les liaisons d'un nom protégé comptent : O(liaisons protégées × lignes).
-        if rests[i] is not None or not bindings or not _mentions_protected(normalize(line), False):
+        if rests[i] is not None or not bindings or not named[i]:
             continue
         name = _path_binding(line)
         if name is None or _WRITE_VERB.search(normalize(line)):
@@ -736,17 +775,26 @@ def _check_code(text: str, tool: str, shell: bool) -> list[tuple[str, str]]:
         reason = next((r for r in map(broad_reference, tokens) if r), None)
     if reason:
         found.append(("lecture-interdite", reason))
-    if _WRITE_VERB.search(stripped) or _open_writes(text):
-        if not shell:
-            stripped = _HARMLESS_REDIRECT.sub(
+    if shell:
+        if _WRITE_VERB.search(stripped) or _open_writes(text):
+            target = _mentions_protected(stripped, shell)
+            if target:
+                found.append(("etat-seance", f"écriture visant « {target} »"))
+            m = _TAMPER_MENTION.search(stripped)
+            if m:
+                found.append(("harnais-modifie", f"écriture visant « {m.group(0).strip()} »"))
+    else:
+        # Code écrit par l'éditeur (story 2.9) : toute mention de l'état de séance compte, quel
+        # que soit le verbe (`tofile`, `pickle.dump`, `os.truncate`, fonction maison...) ; seules
+        # les lignes prouvées en lecture seule sont allégées. Le journal se lit par l'outil Read.
+        target = _mentions_protected(stripped, shell)
+        if target:  # l'allègement retire du texte, il n'ajoute aucune mention
+            rest = _HARMLESS_REDIRECT.sub(
                 " ", normalize(_without_read_lines(text, tool not in _FRAGMENT_TOOLS))
             )
-        target = _mentions_protected(stripped, shell)
+            target = _mentions_protected(rest, shell)
         if target:
-            found.append(("etat-seance", f"écriture visant « {target} »"))
-        m = _TAMPER_MENTION.search(stripped)
-        if m and shell:
-            found.append(("harnais-modifie", f"écriture visant « {m.group(0).strip()} »"))
+            found.append(("etat-seance", f"écriture ou mention visant « {target} »"))
     return found
 
 
@@ -932,6 +980,33 @@ def _in_workspace(path: str, ctx: Context) -> bool:
     return full is not None and (full == ctx.workspace or full.startswith(ctx.workspace + "/"))
 
 
+# Fichiers que Python peut exécuter ou importer : seulement dans scripts/ (story 2.9).
+_CODE_SUFFIX = re.compile(r"\.(?:py[cdowz]?|pth|ipynb)$")
+
+
+def _workspace_rel(path: str, ctx: Context) -> str | None:
+    """Chemin relatif à l'espace (minuscules, noms vus par NTFS), ou None hors de l'espace."""
+    if ctx.workspace is None:
+        return None
+    full = _absolute(path, ctx)
+    if full is None or not full.startswith(ctx.workspace + "/"):
+        return None
+    return "/".join(file_name(s) for s in full[len(ctx.workspace) + 1 :].split("/"))
+
+
+def _is_prose(path: str, ctx: Context) -> bool:
+    """`EDITION.md` ou fichier de `notes/` hors code : texte libre, hors des règles de code.
+
+    Story 2.9 : la prose de l'éditeur cite `rm`, `git`, `state.json` ou `heldout` sans rien
+    exécuter ; les règles de chemin s'appliquent toujours, et un script de `scripts/` qui
+    exécuterait ce texte (`exec`, `runpy`, `importlib`, `sys.path`) reste refusé.
+    """
+    rel = _workspace_rel(path, ctx)
+    if rel is None or _CODE_SUFFIX.search(rel):
+        return False
+    return rel == "edition.md" or bool(re.match(r"^notes/[^/]", rel))
+
+
 def _write_allowed(path: str, ctx: Context) -> bool:
     if ctx.workspace is None:
         return True
@@ -939,6 +1014,8 @@ def _write_allowed(path: str, ctx: Context) -> bool:
     if full is None or not full.startswith(ctx.workspace + "/"):
         return False
     rel = full[len(ctx.workspace) + 1 :]
+    if _CODE_SUFFIX.search(_workspace_rel(path, ctx) or "") and not rel.startswith("scripts/"):
+        return False  # `notes/x.py` : code hors de scripts/, importable par un script
     return bool(
         re.match(r"^(?:scripts|notes)/[^/]", rel)
         or rel == "edition.md"
@@ -1017,7 +1094,7 @@ def check_shell(command: str, ctx: Context) -> list[tuple[str, str]]:
 def _check_paths(name: str, tool_input: dict, ctx: Context) -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
     if name in FILE_READ_TOOLS:
-        for key in ("file_path", "path", "notebook_path"):
+        for key in READ_PATH_KEYS:
             value = tool_input.get(key)
             if isinstance(value, str) and not _in_workspace(value, ctx):
                 found.append(("lecture-hors-espace", f"{key} {value}"))
@@ -1061,6 +1138,8 @@ def check_tool_use(
     if name in FILE_WRITE_TOOLS:
         path = str(tool_input.get("file_path") or tool_input.get("notebook_path") or "")
         found = _check_paths(name, tool_input, ctx) + _check_write_path(path)
+        if _is_prose(path, ctx):
+            return _unique(found)
         content = "\n".join(
             s
             for key, value in tool_input.items()
@@ -1071,6 +1150,12 @@ def check_tool_use(
     if name in NEUTRAL_TOOLS:
         return []
     return [("outil-non-autorise", f"outil {name}")]
+
+
+_IMPORT_PATH = re.compile(
+    r"\bsys\s*\.\s*(?:path|meta_path|path_hooks|path_importer_cache)\b|\bPYTHONPATH\b"
+    r"|\bfrom\s+sys\s+import\b[^\n#]*\b(?:path|meta_path|path_hooks)\b"
+)
 
 
 def check_code_content(content: str, tool: str) -> list[tuple[str, str]]:
@@ -1087,6 +1172,10 @@ def check_code_content(content: str, tool: str) -> list[tuple[str, str]]:
         m = re.search(
             r"getattr\s*\(\s*(?:__builtins__|builtins)|\brunpy\b|\b__builtins__\b", variant
         )
+        if m:
+            found.append(("obfuscation", f"« {m.group(0)} »"))
+        # Chemin d'import modifié : un module de notes/ (prose non auditée) deviendrait du code.
+        m = _IMPORT_PATH.search(variant)
         if m:
             found.append(("obfuscation", f"« {m.group(0)} »"))
         # Noms de bibliothèques d'inférence découpés (`"to" + "rch"`) : forme compacte du code.

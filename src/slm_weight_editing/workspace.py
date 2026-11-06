@@ -155,13 +155,15 @@ def operator_dir(repo: Path) -> Path:
 def hook_settings(workspace: Path, repo: Path) -> dict:
     """Bloc `hooks.PreToolUse` : crochet de refus en forme exec (`command` + `args`), motif `*`.
 
-    Pas d'`onFailure` : un crochet en échec laisse l'appel aux deny des réglages (décision 2).
+    `onFailure: "block"` (story 2.9, échec fermé) : un délai dépassé ou un code de sortie autre
+    que 0 ou 2 bloque l'appel ; le crochet refuse lui-même sur exception ou à son échéance.
     """
     command = {
         "type": "command",
         "command": hook_python(repo).as_posix(),
         "args": ["-I", "-B", posix(repo / HOOK_SCRIPT), posix(workspace)],
         "timeout": HOOK_TIMEOUT,
+        "onFailure": "block",
     }
     return {"PreToolUse": [{"matcher": "*", "hooks": [command]}]}
 

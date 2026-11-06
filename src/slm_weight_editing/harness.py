@@ -243,6 +243,19 @@ def _session_lock(directory: Path):
             lock.unlink(missing_ok=True)
 
 
+def recover_detach(directory: Path) -> str | None:
+    """Reprise d'un `detach-lm-head` tué (story 2.9) : message écrit sur stderr, ou None.
+
+    À appeler sous le verrou de séance (ou celui, mort, d'un processus tué), avant toute action.
+    """
+    from slm_weight_editing import lm_head  # import local : lm_head importe harness
+
+    message = lm_head.recover_interrupted(directory)
+    if message:
+        print(f"Reprise : {message}", file=sys.stderr)
+    return message
+
+
 def unlock_session(
     session_id: str, sessions_root: str | Path = DEFAULT_SESSIONS_ROOT
 ) -> dict | None:
@@ -254,6 +267,11 @@ def unlock_session(
     read_state(directory)
     lock = directory / LOCK_FILE
     if not lock.exists():
+        try:
+            with _session_lock(directory):
+                recover_detach(directory)
+        except HarnessError:
+            pass  # verrou pris entre-temps : son détenteur reprend lui-même
         return None
     data = read_lock(lock)
     if data is not None and pid_alive(data["pid"]):
@@ -271,6 +289,7 @@ def unlock_session(
                 f"verrou illisible pris il y a {age:.0f} s : un lot l'écrit peut-être encore ; "
                 f"rien n'est retiré (réessayer après {_UNREADABLE_LOCK_MIN_AGE:.0f} s)"
             )
+    recover_detach(directory)  # sous le verrou mort, encore en place
     entry = {
         "event": "unlock",
         "pid": data["pid"] if data else None,
@@ -802,6 +821,7 @@ def run_batch(
     directory = session_dir(session_id, sessions_root)
     read_state(directory)
     with _session_lock(directory):
+        recover_detach(directory)
         state = read_state(directory)
         if state.frozen:
             raise HarnessError("séance gelée : plus aucun lot")
