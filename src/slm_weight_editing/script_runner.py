@@ -29,6 +29,7 @@ SCRIPTS_DIR = "scripts"
 DATA_DIR = "data"
 COPIES_DIR = "scripts"
 MAX_OUTPUT = 20_000  # extrait de la sortie gardé dans le journal
+PROBES_DIR = "probes"  # captures de `probe`, lisibles par les scripts, écrites par le harnais
 RUNS_DIR = "runs"  # sortie complète de chaque exécution, lisible par l'éditeur
 MAX_LOG_BYTES = 50 * 1024 * 1024  # au-delà, le fichier de sortie est coupé (disque protégé)
 DEFAULT_THREADS = 4
@@ -212,7 +213,12 @@ def run_script(
             "source": str(copy),
             "sha256": sha256,
             "workspace": str(workspace),
-            "read_roots": [str(work), str(workspace / SCRIPTS_DIR), str(workspace / DATA_DIR)],
+            "read_roots": [
+                str(work),
+                str(workspace / SCRIPTS_DIR),
+                str(workspace / DATA_DIR),
+                str(workspace / PROBES_DIR),
+            ],
             "read_files": [str(directory / harness.JOURNAL_FILE), str(directory / "state.json")],
             "write_roots": [str(work), str(workspace / SCRIPTS_DIR)],
             "python_roots": _python_roots(),

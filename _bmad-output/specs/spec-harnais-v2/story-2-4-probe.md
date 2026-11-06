@@ -1,5 +1,5 @@
 ---
-status: decided
+status: review
 story: "2.4"
 title: Commande probe et budget de probe (CAP-1)
 ---
@@ -78,3 +78,17 @@ Anaël a levé ses points d'arrêt de relecture le 2026-11-06 (« Retire mes poi
 3. Oui : la réservation est consommée même si l'appel plante après elle, comme un lot.
 4. Oui : `probes/` est interdit en écriture à l'éditeur (deny `Edit`/`Write` et crochet du lanceur). Les captures ne sont pas publiées au gel, seuls leurs sha256 sont au journal.
 5. Oui : plafond disque cumulé de `probes/` sur la séance, 20 Go par défaut (option `--probe-disk-max` de `session-workspace`), vérifié avant calcul avec l'estimation de sortie.
+
+## Réalisation (2026-11-06)
+
+Fait : `probe.py` (commande, plafonds, estimation, crochets, captures `.npy` en memmap, manifest, journal `probe_reserve` puis `probe`), `session-workspace --probe-budget/--probe-disk-max`, deny `Edit(./probes/**)`, `probes/` en lecture pour `run-script` (le crochet interdit déjà toute écriture hors `work/` et `scripts/`), audit (`probe` en liste blanche, `--texts` lié à l'espace), consignes. Tests : `tests/test_probe.py` et réalignements de `test_session_workspace.py` et `test_audit_transcript.py`.
+
+Écarts à la fiche :
+- Le budget de probe vit dans la ligne `open` du journal (et `workspace.json`), pas dans `state.json` (`SessionState` inchangé : les séances v1 restent lisibles). `used_probe_tokens` somme les `probe_reserve` du journal, que l'éditeur ne peut pas écrire.
+- `open_session` n'inscrit `probe_budget` et `probe_disk_max` que s'ils sont donnés : `test_open_writes_state_and_journal` reste inchangé.
+- Les captures sont écrites dans `<espace>/probes/<n>/` (racine de l'espace, hors séance) ; les lignes de tous les textes sont mises bout à bout dans chaque `.npy`, offsets dans `manifest.json`. Noms : `resid_pre_lN`, `resid_lN` (après bloc N), `mlp_act_lN`, `attn_out_lN`, `final_norm`, `top_logit_ids`, `top_logit_values`, `token_logits`, `full_vocab_logits`.
+- Estimation de sortie : `mlp_act` compté à `intermediate_size` (la fiche comptait `hidden`), tops à 12 octets (id int64 + valeur float32) ; plafond disque cumulé sur les estimations des réservations.
+- 20 meilleures logits : `min(20, vocabulaire)` (modèle de test à 10 jetons).
+- Texte lu avec `add_special_tokens=False` (l'éditeur écrit lui-même le gabarit) ; `--device` (auto par défaut) ajouté comme `run-batch`.
+- `journal` : `probe` porte aussi le sha256 de chaque `.npy` (`output_files`).
+- Non fait (reporté) : `token_ids` en entrée, `--chat`, `torch.set_num_threads`.

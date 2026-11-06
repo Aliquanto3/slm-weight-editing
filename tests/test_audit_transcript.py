@@ -707,6 +707,8 @@ def test_consigne_states_protocol():
         "run-batch",
         "session-status",
         "run-script scripts/NOM.py",
+        "slm-weight-editing probe",
+        "<BUDGET_PROBE>",
         "uv run<EXTRA> slm-weight-editing",
         "--sessions-root sessions",
         "<BUDGET>",
@@ -771,6 +773,9 @@ def test_ntfs_stream_in_write_path_is_flagged():
         "run-script scripts/x.py --session s1 --sessions-root=notes/fake",
         "session-status --session s1 --sessions notes/fake",
         "run-script scripts/x.py --session s1 --sessions-r=notes/fake",
+        "probe --session s1 --sessions-root sessions --texts C:/elsewhere/t.jsonl --capture resid",
+        "probe --session s1 --sessions-root sessions --texts=../x/t.jsonl --capture resid",
+        "probe --session s2 --sessions-root sessions --texts notes/t.jsonl --capture resid",
     ],
 )
 def test_options_outside_workspace_are_flagged(args):
@@ -806,7 +811,7 @@ UV_PLAIN = "uv run slm-weight-editing"
 CTX_CUDA = dataclasses.replace(CTX_S1, cuda=True)
 
 
-@pytest.mark.parametrize("sub", ["run-batch", "session-status", "run-script"])
+@pytest.mark.parametrize("sub", ["run-batch", "session-status", "run-script", "probe"])
 def test_extra_cuda_is_accepted(sub):
     cmd = f"{UV_CUDA} {sub} --session s1 --sessions-root {WS.as_posix()}/sessions"
     assert audit.check_shell(cmd, CTX_CUDA) == []
@@ -955,13 +960,14 @@ def test_consigne_commands_pass_the_audit_once_placeholders_are_filled():
     text = render("CONSIGNE.md", session_id="s1", budget=10, repo=REPO, data=["gsm8k-train.jsonl"])
     block = text.split("```\n", 2)[1]
     commands = [line for line in block.splitlines() if line.strip()]
-    assert len(commands) == 4
+    assert len(commands) == 5
     assert [c.split("--thinking ")[1].split()[0] for c in commands[:2]] == ["on", "off"]
     for command in commands:
         filled = (
             command.replace("FICHIER.jsonl", "gsm8k-train.jsonl")
             .replace("NOM.py", "edit.py")
             .replace("[--start N] [--count N]", "--start 0 --count 8")
+            .replace("[--layers 23] [--token-ids 7,9] [--full-vocab-positions 3]", "--layers 23")
         )
         assert audit.check_shell(filled, CTX_S1) == [], filled
 
@@ -985,7 +991,7 @@ def test_rendered_instructions_have_no_shell_metacharacter_templates(name, cuda)
         if line.strip().startswith("uv run")
     ]
     subs = {c.split("slm-weight-editing ")[1].split()[0] for c in commands}
-    assert subs == {"run-batch", "session-status", "run-script"}, commands
+    assert subs == {"run-batch", "session-status", "run-script", "probe"}, commands
     assert {"--thinking on", "--thinking off"} <= {
         m for c in commands for m in re.findall(r"--thinking \w+", c)
     }

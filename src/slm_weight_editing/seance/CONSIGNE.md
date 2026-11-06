@@ -12,7 +12,7 @@ Tu édites directement les poids d'un petit modèle de langage pour corriger un 
 
 `<BUDGET>` lots d'inférence, fixés avant la séance. Chaque lot compte, y compris un lot qui plante.
 
-## Les trois seules commandes
+## Les seules commandes
 
 Toute autre commande est refusée par les réglages de la séance, et toute la séance est auditée.
 
@@ -20,11 +20,13 @@ Toute autre commande est refusée par les réglages de la séance, et toute la s
 uv run<EXTRA> slm-weight-editing run-batch --session <ID_SEANCE> --sessions-root sessions --dataset gsm8k --split train --data data/FICHIER.jsonl --thinking on [--start N] [--count N]
 uv run<EXTRA> slm-weight-editing run-batch --session <ID_SEANCE> --sessions-root sessions --dataset gsm8k --split train --data data/FICHIER.jsonl --thinking off [--start N] [--count N]
 uv run<EXTRA> slm-weight-editing session-status --session <ID_SEANCE> --sessions-root sessions
+uv run<EXTRA> slm-weight-editing probe --session <ID_SEANCE> --sessions-root sessions --texts notes/textes.jsonl --capture resid,mlp_act,attn_out,final_norm --positions all [--layers 23] [--token-ids 7,9] [--full-vocab-positions 3]
 uv run<EXTRA> slm-weight-editing run-script scripts/NOM.py --session <ID_SEANCE> --sessions-root sessions
 ```
 
 - `run-batch` est la seule voie d'exécution du modèle : jeux `gsm8k` ou `math`, split `train` seulement, au plus 512 problèmes par lot, génération gloutonne, 4096 jetons au plus, poids rechargés depuis `work/` à chaque lot. Données train disponibles : <DONNEES>.
 - `--thinking on` ou `--thinking off` est obligatoire à chaque lot : choisis l'une des deux lignes `run-batch` ci-dessus (jamais `on|off` : la barre verticale est un enchaînement de commandes, refusé). `on` applique le gabarit de chat avec raisonnement (`enable_thinking=True`), `off` sans (`enable_thinking=False`). Sans lui, ou avec une autre valeur, le lot est refusé avant tout calcul et ne consomme rien. Le mode est inscrit dans la ligne `batch` du journal ; `session-status` compte les lots par mode.
+- `probe` passe des textes fixes dans le modèle de `work/` (un forward par texte, aucun jeton généré) et écrit logits et activations dans `probes/N/`. `--texts` est un fichier JSONL de `notes/` : une ligne `{"text": "..."}` par texte (au plus 64 textes de 8192 jetons, texte brut sans jeton spécial ajouté : écris toi-même le gabarit de chat voulu). `--capture` choisit parmi `resid`, `mlp_act`, `attn_out`, `final_norm` (séparés par des virgules) ; `--positions` vaut `all`, `last` ou une plage `A:B` ; `--layers` liste des couches (toutes par défaut). Sortie : `manifest.json` (jetons de chaque texte, positions, formes, sha256 de `work/`) et un `.npy` float32 par capture (`resid_pre_lN`, `resid_lN`, `mlp_act_lN`, `attn_out_lN`, `final_norm`, `top_logit_ids`, `top_logit_values`, plus `token_logits` avec `--token-ids` et `full_vocab_logits` avec `--full-vocab-positions`), les lignes de tous les textes mises bout à bout. Lis-les dans un script `run-script` avec `np.load("probes/N/resid_l23.npy", mmap_mode="r")`. Budget de probe : `<BUDGET_PROBE>` jetons passés en forward, tous textes confondus, décomptés même si l'appel plante ; un appel qui dépasserait le budget, le plafond de sortie (2 Go par appel) ou le plafond disque cumulé est refusé avant tout calcul. `probes/` est écrit par le harnais seul, jamais par toi. Un lot (`run-batch`) ne consomme pas de jetons de probe et inversement. `probe` ne génère rien : le décodage reste réservé à `run-batch`, et rejouer une génération par des appels `probe` successifs est interdit (coût quadratique en jetons, borné par le budget).
 - `session-status` donne le budget, les lots consommés et le gel.
 - `run-script` est la seule façon d'exécuter du Python. Il ne consomme pas de lot, mais chaque exécution est journalisée avec une copie du script. Chaque script a un délai de <SCRIPT_TIMEOUT> (un script plus long est arrêté ; `--timeout SECONDES` choisit un autre délai, au plus <SCRIPT_MAX_TIMEOUT>, sinon refus) et au plus <SCRIPT_THREADS> threads de calcul, non modifiables. Sa sortie complète (stdout et stderr) est écrite dans `runs/HORODATAGE-SCRIPT.log` : lis ce fichier avec l'outil de lecture ; la console et le journal n'en gardent qu'un extrait.
 - Les sorties de chaque lot sont dans `sessions/<ID_SEANCE>/journal.jsonl` : lis-le avec l'outil de lecture de fichiers, jamais par une commande.
@@ -33,7 +35,7 @@ uv run<EXTRA> slm-weight-editing run-script scripts/NOM.py --session <ID_SEANCE>
 ## Écrire et lancer un script
 
 - Tes scripts vivent dans `scripts/` (outils d'écriture de fichiers). Tes notes vont dans `notes/` ou `EDITION.md`.
-- Un script lancé par `run-script` tourne depuis ce dossier, dans un Python isolé : il lit `sessions/<ID_SEANCE>/work/`, `scripts/` et `data/`, il écrit seulement dans `work/` et `scripts/`. Modules permis : la bibliothèque standard, `numpy`, `safetensors.numpy` et tes modules de `scripts/`.
+- Un script lancé par `run-script` tourne depuis ce dossier, dans un Python isolé : il lit `sessions/<ID_SEANCE>/work/`, `scripts/`, `data/` et `probes/`, il écrit seulement dans `work/` et `scripts/`. Modules permis : la bibliothèque standard, `numpy`, `safetensors.numpy` et tes modules de `scripts/`.
 - `safetensors.numpy` : `load_file(chemin)` rend un dictionnaire de tableaux numpy ; bfloat16 n'existe pas en numpy, ses tenseurs arrivent en `uint16` (16 bits de poids fort d'un float32 : `(u16.astype(np.uint32) << 16).view(np.float32)`). Pour réécrire : `save_file(tenseurs, chemin, dtypes={"<nom>": "BF16"})` avec un tableau `uint16` pour chaque tenseur bfloat16. Tu peux aussi modifier le fichier en place avec `np.memmap`.
 - Tout le reste est refusé à l'exécution et arrête le script : modèle (torch, transformers, llama.cpp...), réseau, sous-processus, ctypes, liens, lecture hors des dossiers ci-dessus, écriture hors de `work/` et `scripts/`, écriture de l'état de séance.
 

@@ -325,6 +325,12 @@ def used_batches(directory: str | Path, state: SessionState | None = None) -> in
     return max(state.used, reserved)
 
 
+def used_probe_tokens(directory: str | Path) -> int:
+    """Jetons de probe consommés : somme des réservations `probe_reserve` du journal."""
+    journal = read_journal(directory)
+    return sum(e.get("tokens", 0) for e in journal if e.get("event") == "probe_reserve")
+
+
 def _registered_ids(sessions_root: Path) -> set[str]:
     path = sessions_root / REGISTRY_FILE
     if not path.exists():
@@ -353,9 +359,19 @@ def open_session(
     *,
     base_revision: str | None = None,
     sessions_root: str | Path = DEFAULT_SESSIONS_ROOT,
+    probe_budget: int | None = None,
+    probe_disk_max: int | None = None,
 ) -> SessionState:
-    """Ouvre une séance : budget écrit une fois pour toutes, checkpoint copié dans `work/`."""
+    """Ouvre une séance : budget écrit une fois pour toutes, checkpoint copié dans `work/`.
+
+    `probe_budget` (jetons passés en forward par `probe`) et `probe_disk_max` (octets cumulés de
+    captures) s'inscrivent dans la ligne `open` seulement s'ils sont donnés : une séance sans
+    ces champs refuse `probe`.
+    """
     _check_budget(budget)
+    for name, value in (("probe_budget", probe_budget), ("probe_disk_max", probe_disk_max)):
+        if value is not None and (type(value) is not int or value <= 0):
+            raise HarnessError(f"{name} {value!r} refusé : entier strictement positif attendu")
     directory = session_dir(session_id, sessions_root)
     root = Path(sessions_root)
     if directory.exists() or session_id in _registered_ids(root):
@@ -375,19 +391,21 @@ def open_session(
     now = _now()
     state = SessionState(session_id, budget, 0, False, str(base.resolve()), base_revision, now, now)
     _write_state(directory, state)
-    _append_journal(
-        directory,
-        {
-            "event": "open",
-            "session_id": session_id,
-            "budget": budget,
-            "base_checkpoint": state.base_checkpoint,
-            "base_revision": base_revision,
-            "base_tensors_sha256": base_tensors,
-            "base_files_sha256": base_files,
-            "at": now,
-        },
-    )
+    opened = {
+        "event": "open",
+        "session_id": session_id,
+        "budget": budget,
+        "base_checkpoint": state.base_checkpoint,
+        "base_revision": base_revision,
+        "base_tensors_sha256": base_tensors,
+        "base_files_sha256": base_files,
+        "at": now,
+    }
+    if probe_budget is not None:
+        opened["probe_budget"] = probe_budget
+    if probe_disk_max is not None:
+        opened["probe_disk_max"] = probe_disk_max
+    _append_journal(directory, opened)
     with (root / REGISTRY_FILE).open("a", encoding="utf-8", newline="\n") as f:
         f.write(json.dumps({"session_id": session_id, "opened_at": now}) + "\n")
     return state
