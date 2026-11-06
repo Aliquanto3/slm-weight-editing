@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -41,10 +42,13 @@ def violations(payload: dict, ctx: audit.Context) -> list[tuple[str, str]]:
     cwd = payload.get("cwd")
     found: list[tuple[str, str]] = []
     if isinstance(cwd, str) and cwd:
-        if audit._absolute(cwd, ctx) != ctx.workspace:
+        # Donnée de Claude Code, pas de l'éditeur : résolue (noms courts 8.3, liens) comme
+        # `audit_transcript._cwd_ok`, et non refusée comme un chemin indéterminable.
+        real = audit._real(cwd)
+        if not os.path.isabs(cwd) or audit._norm_path(real) != ctx.workspace:
             found.append(("hors-espace-seance", f"dossier courant {cwd}"))
         else:
-            ctx = dataclasses.replace(ctx, cwd=cwd)
+            ctx = dataclasses.replace(ctx, cwd=real)
     return found + audit.check_tool_use(name, tool_input, ctx)
 
 

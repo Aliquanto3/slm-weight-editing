@@ -497,6 +497,34 @@ def test_hook_root_comes_from_argument_and_relative_paths_from_cwd(ws):
     assert hook.decide(payload("Read", {"file_path": "CONSIGNE.md"}, ws), ctx) is None
 
 
+def _short_name(path: Path) -> str | None:
+    """Nom court 8.3 de `path` (Windows), None s'il n'en a pas."""
+    if sys.platform != "win32":
+        return None
+    import ctypes
+
+    buf = ctypes.create_unicode_buffer(1024)
+    n = ctypes.windll.kernel32.GetShortPathNameW(str(path), buf, len(buf))
+    short = buf.value if 0 < n < len(buf) else None
+    return short if short and "~" in short else None
+
+
+def test_hook_accepts_short_name_cwd_of_the_workspace(ws):
+    # Le cwd vient de Claude Code (donnée de confiance) : un nom court 8.3 de l'espace n'est pas
+    # un dossier hors de l'espace (l'audit des transcriptions l'accepte aussi).
+    long_dir = ws / "un-dossier-au-nom-long"
+    long_dir.mkdir()
+    short = _short_name(long_dir)
+    if short is None:
+        pytest.skip("pas de nom court 8.3 sur ce volume")
+    (long_dir / "workspace.json").write_text((ws / "workspace.json").read_text("utf-8"), "utf-8")
+    ctx = hook.context(long_dir)
+    assert hook.decide(payload("Read", {"file_path": "workspace.json"}, short), ctx) is None
+    out = hook.decide(payload("Read", {"file_path": "../CONSIGNE.md"}, short), ctx)
+    assert "lecture-hors-espace" in out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert hook.decide(payload("Read", {"file_path": "x"}, "sous-dossier"), ctx) is not None
+
+
 def test_relative_path_resolved_on_received_cwd():
     ctx = dataclasses.replace(CTX_S1, cwd=str(WS / "notes"))
     assert audit._absolute("a.txt", ctx) == f"{CTX_S1.workspace}/notes/a.txt"

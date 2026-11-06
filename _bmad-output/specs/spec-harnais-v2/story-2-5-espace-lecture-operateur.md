@@ -136,3 +136,21 @@ Amendements 1 à 12 traités. Le crochet (`_refusal_hook.py`) appelle `audit_tra
 - Tests : `workspace.OPERATOR_DIR` est redirigé vers un dossier temporaire par une fixture de `conftest.py`, pour ne rien écrire dans `models/` du dépôt.
 - Reste à l'essai à blanc d'Anaël : crochet en `dontAsk`, combinaison avec `blockReads…`, deny `Read(//c/…)`, coût par appel (~0,1 s mesuré pour l'import).
 - README non mis à jour (documentation de la story à faire d'après cette fiche).
+
+## Revue
+
+### Passe 1 (2026-11-06, SHA revu 1af7812)
+
+Branche à jour de main (a691faa). Second avis (Haiku) repris point par point.
+
+- **Important** · medium · second avis 3 (réévalué de low) · corrigé · `_refusal_hook.violations` passait le `cwd` reçu par `_absolute`, qui rend None sur `~` : un espace ouvert par un chemin en nom court 8.3 (TEMP de ce poste : `C:\Users\UTILIS~1\...`) voyait **tous** ses appels refusés (`hors-espace-seance`), alors que l'audit (`_cwd_ok`, `Path.resolve`) l'accepte. Le `cwd` vient de Claude Code, donnée de confiance : il est maintenant résolu par `os.path.realpath` (noms longs, liens) puis comparé ; un `cwd` relatif reste refusé. Test `test_hook_accepts_short_name_cwd_of_the_workspace` (échoue sans le correctif).
+- Rejeté · écart du développeur (refus de tout `cwd` différent de l'espace) · le `cwd` ne peut pas bouger : `cd`, `pushd`, `Set-Location`… sont dans les deny (`DENIED_COMMANDS`, `DENIED_CMDLETS`) et hors de la liste blanche de l'audit ; l'audit des transcriptions applique déjà la même égalité. Pas de faux refus en séance normale.
+- Rejeté · écart du développeur (`onFailure` non posé) · conforme à la décision 2 (crochet explicatif, deny = porte).
+- **Pre-existing** · low · second avis 1 · reporté · abréviations argparse (`--tex`, `--da`, `--sess`) non vues par `_check_options` (`_BOUND_OPTIONS` vient de la story 2.4). Vérifié : `probe` refuse `--texts` hors de l'espace à l'exécution, `run-batch` contrôle ses données et sa séance ; l'audit n'est que la troisième couche. Piste : `allow_abbrev=False` sur les sous-parseurs de l'éditeur (change la CLI, `--sessions` est toléré aujourd'hui).
+- **Pre-existing** · low · revue · reporté · `probe` teste `texts.is_file()` avant le contrôle « hors de l'espace » : le message distingue un fichier absent d'un fichier existant hors de l'espace (oracle d'existence). Inverser les deux contrôles.
+- **Pre-existing** · low · second avis 2 · rejeté pour la story · un Write/Edit dont le contenu nomme `heldout`, `cadrage`, `weight-space` ou `operateur` est refusé : règle de l'audit antérieure (contenu passé à `_check_code`), que le crochet ne fait que rendre visible (amendement 2 : refus si et seulement si l'audit signale). Le motif nomme le terme, l'éditeur peut reformuler ; « opérateur » accentué n'est pas touché. Piste : un motif propre aux écritures plutôt que « tout l'espace est lisible ».
+- Nit · low · second avis 4 · rejeté · `_SAFE_PATH` refuse un dépôt sous un chemin avec espace, avec un message clair ; règle v1.
+- Nit · low · second avis 5 · rejeté · un Edit de `STATE.json` hors des `allow` est refusé par `dontAsk`, puis par le crochet et l'audit (insensibles à la casse).
+- Nit · low · second avis 6 · reporté (déjà prévu) · forme `Read(//c/...)` à confirmer à l'essai à blanc d'Anaël.
+- Rejeté · low · second avis 7 · publication de `BLOCAGES.md` au gel : décision 5, chemins personnels masqués par `public_text`.
+- Complexité : 0 constat (balayage des liens en O(n) à l'audit seulement ; le crochet ne relit ni journal ni historique).
