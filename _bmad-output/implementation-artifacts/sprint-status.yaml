@@ -1,6 +1,6 @@
 # Statuts des epics 1 (spec-slm-weight-editing) et 2 (spec-harnais-v2) ; id N de stories.yaml = story E.N. Mis à jour par l orchestrateur du run.
 generated: 2026-11-04 08:48
-last_updated: 2026-11-06 17:52
+last_updated: 2026-11-06 22:30
 project: slm-weight-editing
 tracking_system: file-system
 story_location: _bmad-output/specs/spec-slm-weight-editing
@@ -22,6 +22,8 @@ development_status:
   2-6-audit-faux-positifs-decodage: done
   2-7-essai-ollama-output-weight: done
   2-8-lm-head-detache: done
+  2-9-durcissement-frontieres: done
+  2-10-doc-consigne-lectures-journal: backlog
   epic-2-retrospective: done
 action_items:
   - id: "epic-2-retro-item-1-a-1-stabiliser-test_probe-référence-de-m"

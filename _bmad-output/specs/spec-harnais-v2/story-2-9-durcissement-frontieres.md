@@ -1,5 +1,5 @@
 ---
-status: review
+status: done
 story: "2.9"
 title: Durcissement des frontières 2.5/2.6/2.8 (constats A-12 ; CAP-6, CAP-9, CAP-10)
 ---
