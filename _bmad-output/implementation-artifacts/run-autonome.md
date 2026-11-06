@@ -39,9 +39,9 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 | V0 | 2.1 · 2.7 | — | 2.1 `harness.py` (verrou), `workspace.py`, `audit_transcript.py`, `__init__.py` ; 2.7 outil GGUF (`report_gguf.py` ou module neuf), doc de l'essai |
 | V1 | 2.2 | 2.2 ← 2.1 | `script_runner.py`, `_sandbox.py`, `workspace.py` |
 | V2 | 2.3 | 2.3 ← 2.2 | `harness.py` (run-batch), `workspace.py`, `audit_transcript.py` |
-| V3 | 2.4 (humaine) · 2.8 (humaine) | 2.4 ← 2.3 ; 2.8 ← 2.7 et essai Ollama | relecture de spec par Anaël d'abord |
-| V4 | 2.5 (humaine) | 2.5 ← 2.4 | relecture de spec par Anaël d'abord ; story à risque |
-| V5 | 2.6 (humaine) | 2.6 ← 2.5 | relecture de spec par Anaël d'abord |
+| V3 | 2.4 | 2.4 ← 2.3 | points d'arrêt levés par Anaël le 2026-11-06 ; décisions dans les fiches |
+| V4 | 2.5 ★ | 2.5 ← 2.4 | story à risque : relecture Opus de la fiche avant le code |
+| V5 | 2.6 · 2.8 | 2.6 ← 2.5 ; 2.8 ← 2.7 (codée sans attendre l'essai Ollama, qui décide de son usage en s2) | |
 
 ## Journal
 
@@ -109,3 +109,57 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 - 2026-11-05 23:00 · run · CI · main verte sur les trois OS après la dernière fusion · a7bd7b4
 - 2026-11-05 23:00 · run · ménage · worktrees et branches locales fusionnées retirés (wt-fiches gardé pour la PR #22) ; branches distantes soumises à Anaël · a7bd7b4
 - 2026-11-05 23:00 · run · attente humaine · essai Ollama de 2.7 (docs/essai-output-weight.md) ; relecture des fiches 2.4, 2.5, 2.6, 2.8 (PR #22) · a7bd7b4
+- 2026-11-06 05:03 · run · décision · Anaël lève ses points d'arrêt (« Retire mes points d'arrêt et continue ») ; 2.4, 2.5, 2.6, 2.8 seront codées ; GPU toujours exclu, Ollama toujours à Anaël · 6a229bf
+- 2026-11-06 05:05 · run · décision · réponses de l'orchestrateur aux 20 questions des fiches, au plus prudent, inscrites dans chaque fiche · 608db2a
+- 2026-11-06 05:08 · fiches · fusion · PR #22 fusionnée (MERGED vérifié) · 34b20e7
+- 2026-11-06 05:09 · 2.4 · dev · lancé (Sonnet, wt-2-4, feat/probe) · 34b20e7
+- 2026-11-06 05:09 · 2.5 · décision · relecture Opus de la fiche lancée avant le code (story à risque) · 34b20e7
+- 2026-11-06 05:13 · 2.5 · décision · relecture Opus de la fiche : 12 amendements (4 high : audit aligné sur la lecture libre, crochet adossé à l'audit, options de lancement, canonicalisation des chemins) · PR #26
+- 2026-11-06 05:17 · 2.5 · fusion · PR #26 (amendements de la fiche) fusionnée, MERGED vérifié · 12e4def
+- 2026-11-06 05:17 · 2.4 · dev · fini, PR #27 (45 tests, écarts consignés dans la fiche) · b84596f
+- 2026-11-06 05:18 · 2.4 · second-avis · lancé (Haiku) · b84596f
+- 2026-11-06 05:18 · 2.5 · dev · lancé (Opus, story à risque, wt-2-5 empilée sur feat/probe) · 623c6cc
+- 2026-11-06 05:22 · 2.4 · second-avis · 5 constats (1 medium : logits de toutes les positions matérialisés avant filtrage, OOM après réservation ; 4 low) · b84596f
+- 2026-11-06 05:22 · 2.4 · review · passe 1 lancée (Opus, sans rebase : 2.5 empilée) · b84596f
+- 2026-11-06 05:26 · 2.4 · review · passe 1 : 2 Important corrigés (logits par blocs de 256 depuis final_norm, message 64 textes), BOM accepté ; 2 low écartés · 49bf4d1
+- 2026-11-06 05:26 · 2.4 · review · passe 2 lancée sur 1574b9a..49bf4d1 (correctif medium non trivial) · 49bf4d1
+- 2026-11-06 05:26 · 2.5 · report · la branche 2.5 devra intégrer 49bf4d1 (probe.py) avant revue · 
+- 2026-11-06 05:33 · 2.4 · review · passe 2 : 1 Important corrigé (logits indépendantes du nombre de lignes de la matmul, blocs complétés à 16 lignes) ; passe 3 remplacée par relecture de l'orchestrateur (diff de 19 lignes) · 2527afe
+- 2026-11-06 05:33 · 2.4 · CI · verte sur les trois OS · 2527afe
+- 2026-11-06 05:33 · 2.4 · fusion · PR #27 fusionnée, MERGED vérifié ; report : vérifier la garde d'égalité et la mémoire sur Qwen3.5 en CUDA (identité bit à bit non garantie sous cuBLAS) · a691faa
+- 2026-11-06 05:34 · 2.8 · dev · lancé (Sonnet, wt-2-8 sur main, en parallèle de 2.5) · a691faa
+- 2026-11-06 05:36 · 2.5 · dev · fini, PR #28 base main (12 amendements traités ; écarts : messages du harnais par ligne générique EDITOR_WAY, refus si cwd hors espace, onFailure non posé) · 1af7812
+- 2026-11-06 05:36 · 2.5 · second-avis · lancé (Haiku) · 1af7812
+- 2026-11-06 05:41 · 2.5 · second-avis · 7 constats, aucun high (medium : abréviation --tex non contrôlée, faux refus des notes citant heldout/cadrage ; cwd 8.3 bloquant, réévalué medium car TEMP est en 8.3 sur ce poste) · 1af7812
+- 2026-11-06 05:41 · 2.5 · review · passe 1 lancée (Opus) · 1af7812
+- 2026-11-06 05:46 · 2.8 · dev · fini, PR #29 (26 tests ; lm_head toujours au diff, multi-fichiers refusé) · 90cccf8
+- 2026-11-06 05:46 · 2.8 · second-avis · lancé (Haiku) · 90cccf8
+- 2026-11-06 05:54 · 2.5 · review · passe 1 : 1 Important corrigé (cwd en nom 8.3 refusé par le crochet) ; --tex, faux refus « heldout » en prose, fuite is_file de probe reportés (low, antérieurs) ; passe 2 remplacée par relecture de l'orchestrateur · a63c436
+- 2026-11-06 05:54 · 2.5 · CI · rouge ubuntu et macos : interpréteur du crochet introuvable (.venv/bin/python résolu vers la base) · a63c436
+- 2026-11-06 05:54 · 2.5 · décision · correctif de l'orchestrateur : chemin de l'interpréteur non résolu, repli sur le venv courant · 3c154c2
+- 2026-11-06 05:54 · 2.8 · second-avis · 5 constats (2 medium : config re-liée au gel non détectée, écritures non atomiques bloquant la séance) · 90cccf8
+- 2026-11-06 05:54 · 2.8 · review · passe 1 lancée (Opus) · 90cccf8
+- 2026-11-06 05:54 · 2.7 · décision · Anaël autorise Ollama (« Ollama est disponible actuellement, tu peux t'en servir ») ; GPU libre vérifié · 
+- 2026-11-06 05:54 · 2.7 · recette · essai = témoin = officiel mot pour mot ×8, temps +0 %, taille +26,1 % ; CAP-10 maintenu, seuil de taille de la décision 5 soumis à Anaël · PR #30
+- 2026-11-06 06:00 · 2.5 · CI · rouge macos (test rule_path : /home résolu en /System/Volumes/Data/home), test corrigé par l'orchestrateur · 53fe45e
+- 2026-11-06 06:00 · 2.5 · CI · verte sur les trois OS · 53fe45e
+- 2026-11-06 06:00 · 2.5 · fusion · PR #28 fusionnée, MERGED vérifié · bd8a86e
+- 2026-11-06 06:00 · 2.7 · fusion · PR #30 (résultat de l'essai) fusionnée, MERGED vérifié ; 2.7 terminée · e512639
+- 2026-11-06 06:00 · 2.8 · review · passe 1 : 3 Important corrigés (config re-liée refusée au gel, reprise des écritures par .detach-bak, config modifiée avant détachement refusée) ; passe 2 lancée avec merge de main · 23149d1
+- 2026-11-06 06:00 · 2.6 · dev · lancé (Sonnet, wt-2-6 sur main) · e512639
+- 2026-11-06 06:01 · 2.8 · review · passe 2 : 1 Important corrigé (sauvegarde .detach-bak comptée dans work/ et publiée au gel ; déplacée dans <séance>/detach-bak, reprise _recover) ; passe 3 lancée avec merge de main · 47a84c5
+- 2026-11-06 06:10 · 2.8 · review · passe 3 : 0 Important ; merge de main (2.5) fait, un conflit dans audit_transcript.py résolu · 915c1dd
+- 2026-11-06 06:10 · 2.8 · CI · rouge : test lm_head sous Linux (modèle projeté en mémoire sur le fichier réécrit, défaut du test, corrigé par l'orchestrateur) ; probe sous Windows (écart d'1 ulp, main vert sur les mêmes tests : instabilité à confirmer) · f53b77e
+- 2026-11-06 06:10 · 2.6 · dev · fini, PR #31 (44 tests ; codes 0/1/2, ancien 2 → 3) · 5190597
+- 2026-11-06 06:10 · 2.6 · second-avis · lancé (Haiku) · 5190597
+- 2026-11-06 06:13 · 2.8 · CI · verte sur les trois OS (probe Windows passé : écart d'1 ulp instable, report) · f53b77e
+- 2026-11-06 06:13 · 2.8 · fusion · PR #29 fusionnée, MERGED vérifié · 2d79040
+- 2026-11-06 06:13 · 2.6 · second-avis · 7 constats (3 medium : open(Path(...)) d'écriture pris pour une lecture, régression ; faux négatifs de copies argmax/cumsum ; suite de probes cassée par une sonde intercalée) · 5190597
+- 2026-11-06 06:13 · 2.6 · review · passe 1 lancée (Opus) avec merge de main · 5190597
+- 2026-11-06 06:19 · 2.6 · review · passe 1 : 3 Important corrigés (exemption de lecture prouvée par AST, copies max/key et alias, suites de probes par chaîne de préfixes) ; passe 2 lancée · a56afda
+- 2026-11-06 06:26 · 2.6 · review · passe 2 : 3 Important corrigés (open(Path(...)) d'écriture par AST, liste blanche des appels de lecture, rescorage intercalé) ; passe 3 lancée (faux positifs de la liste blanche) · 708b056
+- 2026-11-06 06:45 · 2.6 · review · passe 3 : 2 Important corrigés (8 scripts légitimes refusés, 4 fuites d'écriture par la liste blanche) ; pas de passe 4, exemption heuristique signalée à Anaël · 198735f
+- 2026-11-06 06:45 · 2.6 · CI · verte sur les trois OS · 198735f
+- 2026-11-06 06:45 · 2.6 · fusion · PR #31 fusionnée, MERGED vérifié ; Epic 2 terminé · cd23d51
+- 2026-11-06 06:45 · run · report · à Anaël : seuil de taille de CAP-10 (+26,1 %) ; essai à blanc de 2.5 (crochet en dontAsk, Read(//c/…), /hooks /memory /mcp /plugin) ; rejeu de l'audit sur s1 (critère 8 de 2.6) ; vérif. probe sur Qwen3.5 en CUDA ; flakiness d'1 ulp de test_probe sous Windows ; allow_abbrev (--tex) ; modèles Ollama qwen35-temoin et qwen35-output-test laissés en place ; release v0.2.0 à décider · cd23d51
+- 2026-11-06 06:45 · run · ménage · worktrees wt-2-4, wt-2-5, wt-2-6, wt-2-8, wt-doc25, wt-res27 retirés, branches locales fusionnées supprimées ; branches distantes soumises à Anaël · cd23d51
