@@ -258,7 +258,9 @@ def test_rule_path_windows(path, want):
 
 @pytest.mark.skipif(sys.platform == "win32", reason="chemins POSIX")
 def test_rule_path_posix():
-    assert workspace.rule_path(Path("/home/anael/depot")) == "//home/anael/depot"
+    # Chemin résolu (macOS : /home -> /System/Volumes/Data/home), préfixé de « / ».
+    expected = "/" + Path("/home/anael/depot").resolve().as_posix()
+    assert workspace.rule_path(Path("/home/anael/depot")) == expected
 
 
 # Critères 3 et 4 : crochet de refus, familles de refus.
