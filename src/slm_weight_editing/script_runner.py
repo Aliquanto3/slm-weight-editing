@@ -213,13 +213,8 @@ def run_script(
             "source": str(copy),
             "sha256": sha256,
             "workspace": str(workspace),
-            "read_roots": [
-                str(work),
-                str(workspace / SCRIPTS_DIR),
-                str(workspace / DATA_DIR),
-                str(workspace / PROBES_DIR),
-            ],
-            "read_files": [str(directory / harness.JOURNAL_FILE), str(directory / "state.json")],
+            # Lecture libre de tout l'espace (CAP-5) ; l'écriture reste celle de la v1.
+            "read_roots": [str(workspace)],
             "write_roots": [str(work), str(workspace / SCRIPTS_DIR)],
             "python_roots": _python_roots(),
         }
@@ -300,7 +295,7 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
         help="exécute un script Python de l'éditeur sous le crochet d'audit (aucun lot consommé)",
         description=(
             "Lance scripts/<x>.py de l'espace de séance dans un python -I isolé : lecture de "
-            "work/, scripts/ et data/, écriture de work/ et scripts/, numpy et la bibliothèque "
+            "tout l'espace, écriture de work/ et scripts/, numpy et la bibliothèque "
             "standard seulement ; ni modèle, ni réseau, ni sous-processus. Journalisé."
         ),
     )
@@ -324,6 +319,7 @@ def run(args: argparse.Namespace) -> int:
         )
     except harness.HarnessError as exc:
         print(f"Erreur : {exc}", file=sys.stderr)
+        print(harness.EDITOR_WAY, file=sys.stderr)
         return exc.exit_code
     except OSError as exc:
         print(f"Erreur : {exc}", file=sys.stderr)

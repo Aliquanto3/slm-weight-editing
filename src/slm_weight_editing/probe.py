@@ -526,6 +526,7 @@ def run(args: argparse.Namespace) -> int:
         )
     except HarnessError as exc:
         print(f"Erreur : {exc}", file=sys.stderr)
+        print(harness.EDITOR_WAY, file=sys.stderr)
         return exc.exit_code
     except OSError as exc:
         print(f"Erreur : {exc}", file=sys.stderr)

@@ -1,5 +1,5 @@
 ---
-status: decided
+status: review
 story: "2.5"
 title: Espace de séance, lecture libre, OPERATEUR.md, refus expliqués, BLOCAGES.md (CAP-4, CAP-5, CAP-6, consigne de CAP-3)
 ---
@@ -121,3 +121,18 @@ Lignes citées sur main@34b20e7.
 12. Le crochet compare en minuscules (`normalize`, audit l. 188), pour que le motif soit donné quelle que soit la casse (`HELDOUT`, `Workspace.json`).
 
 Si le crochet réutilise l'audit (2), les points 4 et 12 sont des corrections de l'audit lui-même et protègent aussi la troisième couche : traiter 1, 2 et 4 ensemble.
+
+## Réalisation (2026-11-06) et écarts
+
+Amendements 1 à 12 traités. Le crochet (`_refusal_hook.py`) appelle `audit_transcript.check_tool_use` avec le `Context` de `workspace.json` ; la racine vient de l'argument, les chemins relatifs du `cwd` reçu, et `_absolute` de l'audit résout liens et jonctions (`os.path.realpath`), refuse `//?/`, `//./`, UNC, `~` et `:` hors lecteur : le crochet et l'audit (troisième couche) en profitent ensemble. Tests : `tests/test_espace_lecture.py`.
+
+Écarts :
+- Harnais (critère 3, famille « budget, gel, verrou ») : les ~50 messages de `HarnessError` ne sont pas réécrits un à un ; les quatre commandes de l'éditeur ajoutent sous chaque refus la ligne `harness.EDITOR_WAY` (commandes permises, état par `session-status`, `notes/BLOCAGES.md`). Pas d'identifiant de règle sur ces refus.
+- Nouvelle règle `import-interdit` dans `RULES` (refus d'import du lanceur) ; `ALLOWED_WAYS` couvre toutes les règles, `_sandbox.WAYS` en est un sous-ensemble (test).
+- Le crochet refuse aussi tout appel dont le `cwd` reçu n'est pas l'espace (`hors-espace-seance`, comme l'audit le fait par transcription).
+- `onFailure` non posé : la doc (v2.1.295+) permet `"block"`, mais la décision 2 garde « crochet en échec, deny décident ».
+- Lecture libre dans l'audit : seul `.claude/` est exempté, et seulement pour une lecture par outil dans l'espace ; `docs/`, `tests/`... restent signalés même dans l'espace. `open(...)` en lecture d'un nom protégé n'est plus signalé ; un texte qui lit le journal et écrit ailleurs (`json.dump`, `open(..., "w")`) reste signalé `etat-seance` (analyse du texte entier) : faux positif à relire. `os.open` n'est une lecture qu'avec `os.O_RDONLY` seul.
+- Balayage des liens (`audit_workspace_links`) : espace absent, pas de balayage (déjà signalé par les réglages).
+- Tests : `workspace.OPERATOR_DIR` est redirigé vers un dossier temporaire par une fixture de `conftest.py`, pour ne rien écrire dans `models/` du dépôt.
+- Reste à l'essai à blanc d'Anaël : crochet en `dontAsk`, combinaison avec `blockReads…`, deny `Read(//c/…)`, coût par appel (~0,1 s mesuré pour l'import).
+- README non mis à jour (documentation de la story à faire d'après cette fiche).
