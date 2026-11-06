@@ -106,3 +106,12 @@ Base : `feat/probe` (b84596f) fusionnée avec `origin/main` (docs seulement), sa
 - Nit · low · second avis 5 · rejeté : écart consigné et motivé (budget dans la ligne `open`, somme des `probe_reserve` d'un journal non inscriptible par l'éditeur ; aucun compteur `state.json` à recouper).
 - Complexité : 0 constat (journal relu deux fois par appel, O(n) ; offsets O(textes²) sur 64 textes au plus).
 - Report (GPU/modèle réel) : vérifier sur Qwen3.5 en CUDA que la garde d'égalité de la dernière logit tient (lm_head sans post-traitement, même noyau pour 1 ligne) et mesurer la mémoire crête d'une probe de 8 192 jetons en `--positions all`.
+
+### Passe 2 (2026-11-06, SHA revu 49bf4d1)
+
+Diff relu : `1574b9a..49bf4d1` (correctifs de la passe 1), sans rebase (2.5 empilée).
+
+- Important · medium · revue · corrigé : la logit d'une position dépendait du nombre de lignes de la matmul de `lm_head` (une ligne passe par gemv, quelques lignes par un autre noyau). Mesuré sur un Qwen3 aléatoire (hidden 512 à 1 024, vocabulaire 8 192, CPU) : écart de 1e-6 en f32 et 8e-6 en bf16 entre 1 ligne et un bloc, alors que les blocs de 4 lignes et plus rendent les mêmes bits que le forward complet. Effet : `full_vocab_logits` (calculé position par position) ne concordait pas avec `top_logit_values` et `token_logits` de la même position, et `--positions last` ne rendait pas les mêmes logits que `--positions all`. Chaque bloc est complété à `MIN_LOGIT_ROWS` = 16 lignes, `full_vocab_logits` est calculé par blocs ; la garde reste sur une ligne, comme le forward `logits_to_keep=1`. Test `test_logits_of_a_position_do_not_depend_on_how_many_are_asked` (rouge avant le correctif).
+- Vérifié sans constat : garde exacte vraie en f32 et bf16, embeddings liés ou non (Qwen3, Llama) ; `logits_to_keep` accepté par `Qwen3ForCausalLM`, `Qwen3_5ForCausalLM` et `Qwen3_5ForConditionalGeneration` de transformers 5.22.1 (`slice_logits_to_keep` puis `lm_head`, sans post-traitement) ; un modèle à `final_logit_softcapping` est refusé par la garde, comme voulu ; `.float()` seulement sur un bloc de 256 lignes au plus.
+- Nit · low · revue · rejeté : la garde tombe après `probe_reserve` et la création des `.npy` vides de `probes/<n>/` ; l'état reste cohérent (numéro suivant compté sur les `probe_reserve`, réservation consommée comme un plantage) et vérifier avant la réservation demanderait un forward non décompté.
+- Complexité : 0 constat.

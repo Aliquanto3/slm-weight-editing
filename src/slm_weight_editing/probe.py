@@ -26,6 +26,10 @@ MAX_TEXT_TOKENS = 8192
 MAX_OUTPUT_BYTES = 2 * 1000**3
 TOP_K = 20
 LOGIT_CHUNK = 256  # positions dont les logits sont calculées ensemble (256 x 248 320 x 4 o)
+# Une matmul d'une ou de quelques lignes passe par un autre noyau (gemv) et rend d'autres bits :
+# chaque bloc est complété à ce nombre de lignes pour que la logit d'une position ne dépende pas
+# du nombre de positions demandées.
+MIN_LOGIT_ROWS = 16
 CAPTURES = ("resid", "mlp_act", "attn_out", "final_norm")
 DEFAULT_PROBE_BUDGET = 2_000_000
 DEFAULT_PROBE_DISK_MAX = 20 * 1000**3
@@ -269,8 +273,9 @@ def _forward_all(
     hooks.append(norm.register_forward_hook(lambda m, a, o: final.__setitem__("h", _first(o))))
 
     def logits_of(positions: list[int]) -> torch.Tensor:
-        index = torch.tensor(positions, dtype=torch.long, device=device)
-        return head(final["h"][0, index]).float()
+        padded = positions + [positions[-1]] * (MIN_LOGIT_ROWS - len(positions))
+        index = torch.tensor(padded, dtype=torch.long, device=device)
+        return head(final["h"][0, index]).float()[: len(positions)]
 
     try:
         with torch.inference_mode():
@@ -280,7 +285,8 @@ def _forward_all(
                 tensor = torch.tensor([ids], dtype=torch.long, device=device)
                 last = model(input_ids=tensor, logits_to_keep=1).logits[0, -1].float()
                 dtype_name = str(model.dtype)
-                if not torch.equal(logits_of([len(ids) - 1])[0], last):
+                # Une ligne de chaque côté : même noyau que le forward en `logits_to_keep=1`.
+                if not torch.equal(head(final["h"][0, -1:]).float()[0], last):
                     raise HarnessError(
                         "logits du modèle non reproductibles depuis la norme finale "
                         "(post-traitement après lm_head) : modèle non pris en charge par probe",
@@ -297,9 +303,10 @@ def _forward_all(
                         tok_logits[row : row + len(part)] = logits[:, token_ids].cpu().numpy()
                     del logits, top
                 if fv is not None:
-                    for position in full_vocab:
-                        fv[fv_offset] = logits_of([position])[0].cpu().numpy()
-                        fv_offset += 1
+                    for start in range(0, len(full_vocab), LOGIT_CHUNK):
+                        part = full_vocab[start : start + LOGIT_CHUNK]
+                        fv[fv_offset : fv_offset + len(part)] = logits_of(part).cpu().numpy()
+                        fv_offset += len(part)
                 idx = torch.tensor(selected, dtype=torch.long, device=device)
                 for name, value in seen.items():
                     array = value[0, idx].float().cpu().numpy()

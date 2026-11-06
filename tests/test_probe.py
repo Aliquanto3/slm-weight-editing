@@ -673,3 +673,34 @@ def test_logits_never_materialised_for_all_positions(ws, monkeypatch):
     assert np.array_equal(np.load(out / "top_logit_values.npy"), top.values.numpy())
     assert np.array_equal(np.load(out / "top_logit_ids.npy"), top.indices.numpy())
     assert np.array_equal(np.load(out / "token_logits.npy"), want[:, [7, 9]].numpy())
+
+
+def test_logits_of_a_position_do_not_depend_on_how_many_are_asked(tmp_path):
+    # Revue passe 2 : une matmul d'une seule ligne (gemv) ne rend pas les mêmes bits qu'un bloc ;
+    # full_vocab_logits, token_logits et top_logit_values d'une même position doivent concorder,
+    # que l'on demande une position ou toutes.
+    wide = tmp_path / "wide"
+    fast = PreTrainedTokenizerFast.from_pretrained(build_checkpoint(tmp_path / "tok"))
+    torch.manual_seed(3)
+    cfg = LlamaConfig(
+        vocab_size=4096, hidden_size=512, intermediate_size=64, num_hidden_layers=1,
+        num_attention_heads=4, num_key_value_heads=1, max_position_embeddings=64,
+        tie_word_embeddings=True,
+    )  # fmt: skip
+    wide.mkdir()
+    LlamaForCausalLM(cfg).save_pretrained(wide)
+    fast.save_pretrained(wide)
+    ws = make_ws(tmp_path, wide)
+    call(ws, capture=["final_norm"], positions="all", token_ids=[7, 9], full_vocab_positions=[3])
+    call(ws, capture=["final_norm"], positions="last", token_ids=[7, 9])
+    every, last = ws / "probes" / "1", ws / "probes" / "2"
+    fv = np.load(every / "full_vocab_logits.npy")
+    texts = json.loads((every / "manifest.json").read_text("utf-8"))["texts"]
+    rows = [t["offset"] + 3 for t in texts]
+    top = torch.topk(torch.from_numpy(fv), 20, dim=-1)
+    assert np.array_equal(np.load(every / "top_logit_values.npy")[rows], top.values.numpy())
+    assert np.array_equal(np.load(every / "token_logits.npy")[rows], fv[:, [7, 9]])
+    ends = [t["offset"] + len(t["positions"]) - 1 for t in texts]
+    assert np.array_equal(
+        np.load(last / "token_logits.npy"), np.load(every / "token_logits.npy")[ends]
+    )
