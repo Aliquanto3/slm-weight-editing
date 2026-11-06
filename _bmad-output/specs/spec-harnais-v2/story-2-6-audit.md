@@ -1,5 +1,5 @@
 ---
-status: decided
+status: review
 story: "2.6"
 title: Audit sans les faux positifs de s1, signalement du décodage autorégressif (CAP-9, audit de CAP-3)
 ---
@@ -81,3 +81,14 @@ Anaël a levé ses points d'arrêt de relecture le 2026-11-06 (« Retire mes poi
 3. Suite signalée : de 1 à 4 jetons ajoutés à chaque appel, à partir de 3 appels consécutifs.
 4. Oui, ce faux positif `etat-seance` est corrigé dans cette story.
 5. Oui : `chr(` et le décodage d'octets sont acceptés seulement dans le code (copies de scripts, outils d'écriture). Le refus reste dans les commandes shell.
+
+## Réalisation (2026-11-06) et écarts
+
+`audit_transcript.py` : `re.compile(` et `regex.compile(` acceptés (`compile(` nu et `builtins.compile` refusés) ; `chr(` et `bytes.fromhex` acceptés seulement hors shell (`_BYTE_DECODING`) ; `_without_read_lines` : dans le code, une ligne qui ne fait que lire (`open` en lecture, `read_text`, `read_bytes`) ne compte plus pour `etat-seance`. Nouveau `audit_decode.py` (`scan_script` en AST, `scan_probe_suites`, `review_candidates`), appelé par `audit-session` : section « À relire », `--json`, règle `decodage-autoregressif` dans `RULES` (jamais rendue par `check_tool_use`, donc jamais refusée par le crochet). Tests : `tests/test_audit_decode.py`.
+
+Écarts :
+- Codes de sortie : 0 propre, 1 violation, 2 à relire seulement (décision 1) ; l'ancien code 2 « entrée illisible » passe à 3 (tests réalignés).
+- Critère 3 (Grep sur le journal) : déjà vert depuis la story 2.5 ; seuls des tests de non-régression sont ajoutés. Faux positif d'origine non reproduit.
+- Critère 8 (rejeu de la transcription s1) : non fait ici, aucune transcription s1 n'a été cherchée ; à faire par Anaël à la relecture.
+- Limites de l'heuristique : une affectation du nom protégé (`p = "journal.jsonl"`) ou un `open` sur plusieurs lignes reste signalé `etat-seance` ; une séquence portée par un attribut d'objet ou une fonction appelée hors de la boucle échappe à la détection ; signal « jeton parmi les 20 meilleurs » non implémenté.
+- `allow_abbrev=False` sur les sous-parseurs (report de la revue 2.5) : laissé, change la CLI. `ALLOWED_SUBCOMMANDS` non touchée.

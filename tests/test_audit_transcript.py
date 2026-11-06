@@ -546,9 +546,9 @@ def test_cli_requires_workspace_session_and_reference(tmp_path, capsys):
             main(args)
         assert exc.value.code == 2
     capsys.readouterr()
-    assert cli(tmp_path / "absent.jsonl", s, ref) == 2
+    assert cli(tmp_path / "absent.jsonl", s, ref) == 3
     assert "introuvable" in capsys.readouterr().err
-    assert cli(t, tmp_path / "vide", ref) == 2
+    assert cli(t, tmp_path / "vide", ref) == 3
 
 
 def test_base_matches_reference(tmp_path):
@@ -598,10 +598,10 @@ def test_reference_file_requires_files_and_revision(tmp_path, capsys):
     assert cli(t, s, ref) == 1
     assert "révision rev1 au lieu de rev9" in capsys.readouterr().out
     ref.write_text(json.dumps({"revision": "rev1", "tensors_sha256": REF}), encoding="utf-8")
-    assert cli(t, s, ref) == 2
+    assert cli(t, s, ref) == 3
     assert "files_sha256" in capsys.readouterr().err
     ref.write_text("[]", encoding="utf-8")
-    assert cli(t, s, ref) == 2
+    assert cli(t, s, ref) == 3
 
 
 def test_cli_reference_from_checkpoint(tmp_path):

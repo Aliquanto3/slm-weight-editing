@@ -20,6 +20,7 @@ Faux positifs à relire à la main ; limites : fiche de la story 5.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import os
@@ -30,6 +31,8 @@ import sys
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
+
+from slm_weight_editing import audit_decode
 
 RULES = {
     "transcription": "ligne de transcription illisible (JSON invalide)",
@@ -60,6 +63,7 @@ RULES = {
     "journal-seance": "ligne open du journal absente, multiple ou illisible",
     "base-differente": "séance ouverte sur une base qui diffère de la révision publiée",
     "import-interdit": "module ou code hors de la bibliothèque standard, de numpy et de scripts/",
+    audit_decode.RULE: "décodage autorégressif possible (liste à relire, ne fait pas échouer)",
 }
 
 # Voie permise de chaque règle (story 2.5, CAP-6) : un refus vu par l'éditeur dit la règle et ce
@@ -96,6 +100,7 @@ ALLOWED_WAYS = {
     "base-differente": "rien à faire côté éditeur (audit d'Anaël)",
     "import-interdit": "numpy, safetensors.numpy, bibliothèque standard ; modèle par run-batch "
     "ou probe",
+    audit_decode.RULE: "génération par run-batch seulement ; ni probe ni script ne génère",
 }
 
 
@@ -165,10 +170,13 @@ _NETWORK = re.compile(
 )
 _OBFUSCATION = re.compile(
     r"base64|-encodedcommand|\s-e(?:nc?)?\s+[a-z0-9+/=]{16,}|\beval\b|\biex\b|invoke-expression"
-    r"|\bexec\s*\(|__import__|importlib|\bcompile\s*\(|codecs\.decode|bytes\.fromhex|\[char\]"
-    r"|\bchr\s*\(|rot13|\bxxd\b|start-process|subprocess|os\.system|os\.popen|os\.exec|\bpty\b"
+    r"|\bexec\s*\(|__import__|importlib|(?<!\bre\.)(?<!\bregex\.)\bcompile\s*\(|codecs\.decode"
+    r"|\[char\]|rot13|\bxxd\b|start-process|subprocess|os\.system|os\.popen|os\.exec|\bpty\b"
     r"|\bctypes\b|\bmarshal\b|\bpickle\b"
 )
+# Décodage d'octets (table `bytes_to_unicode` du tokenizer) : accepté dans le code (copies de
+# scripts, Write/Edit), refusé dans une commande shell (story 2.6, CAP-9).
+_BYTE_DECODING = re.compile(r"\bchr\s*\(|bytes\.fromhex")
 _GIT = re.compile(r"(?:^|[\s;|&(])(?:git|gh)(?:\.exe)?(?=\s|$)")
 _INSTALL = re.compile(
     r"\bpip3?\b|\buv\s+(?:add|pip|sync|tool|lock|remove)\b|\buvx\b|\bconda\b|\bwinget\b"
@@ -337,6 +345,22 @@ def _open_writes(text: str) -> bool:
     return False
 
 
+def _without_read_lines(text: str) -> str:
+    """Code sans les lignes qui ne font que lire (`open` en lecture, `read_text`, `read_bytes`).
+
+    Un script peut lire le journal et écrire ailleurs (CAP-9) : le nom protégé n'est retenu que
+    sur les lignes qui peuvent écrire. Repli prudent : une affectation du nom (`p = "state.json"`),
+    un `open` sur plusieurs lignes ou un mode variable restent comptés.
+    """
+    kept = []
+    for line in text.split("\n"):
+        reads = re.search(r"\bopen\s*\(|read_text|read_bytes", line.lower())
+        if reads and not _WRITE_VERB.search(normalize(line)) and not _open_writes(line):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def _check_code(text: str, tool: str, shell: bool) -> list[tuple[str, str]]:
     """Règles communes aux commandes shell et au code écrit par l'agent."""
     found: list[tuple[str, str]] = []
@@ -373,7 +397,7 @@ def _check_code(text: str, tool: str, shell: bool) -> list[tuple[str, str]]:
     m = _NETWORK.search(norm)
     if m:
         found.append(("web", f"« {m.group(0).strip()} »"))
-    m = _OBFUSCATION.search(norm)
+    m = _OBFUSCATION.search(norm) or (_BYTE_DECODING.search(norm) if shell else None)
     if m:
         found.append(("obfuscation", f"« {m.group(0).strip()} »"))
     if shell:
@@ -389,6 +413,8 @@ def _check_code(text: str, tool: str, shell: bool) -> list[tuple[str, str]]:
     if reason:
         found.append(("lecture-interdite", reason))
     if _WRITE_VERB.search(stripped) or _open_writes(text):
+        if not shell:
+            stripped = _HARMLESS_REDIRECT.sub(" ", normalize(_without_read_lines(text)))
         target = _mentions_protected(stripped, shell)
         if target:
             found.append(("etat-seance", f"écriture visant « {target} »"))
@@ -1061,7 +1087,9 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
         description=(
             "Échoue (code 1) sur toute commande hors liste blanche, lecture hors de l'espace, "
             "accès web, exécution du modèle hors du harnais, écriture de l'état de séance, "
-            "script refusé par run-script ou base différente de la révision publiée."
+            "script refusé par run-script ou base différente de la révision publiée. "
+            "Code 2 : aucune violation, mais des copies de scripts ou des suites de probes à "
+            "relire (décodage autorégressif possible) ; code 3 : erreur d'entrée."
         ),
     )
     p.add_argument("transcripts", nargs="+", help="transcription(s) JSONL de la séance")
@@ -1075,6 +1103,9 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
         "--reference-from", help="checkpoint de la révision publiée, dont on calcule les sha256"
     )
     p.add_argument("--base-revision", help="révision attendue de la base (ligne open)")
+    p.add_argument(
+        "--json", action="store_true", help="sortie JSON : violations et liste « à relire »"
+    )
     p.add_argument("--write-reference", help="écrit la référence calculée par --reference-from")
     p.add_argument(
         "--repo",
@@ -1097,10 +1128,10 @@ def run(args: argparse.Namespace) -> int:
         missing = [f for f in files if not f.is_file()]
         if missing:
             print(f"Erreur : transcription introuvable : {missing[0]}", file=sys.stderr)
-            return 2
+            return 3
         if not (Path(args.session_dir) / "journal.jsonl").is_file():
             print(f"Erreur : journal introuvable dans {args.session_dir}", file=sys.stderr)
-            return 2
+            return 3
         session_id = Path(args.session_dir).resolve().name
         violations = [
             v
@@ -1111,14 +1142,30 @@ def run(args: argparse.Namespace) -> int:
         violations += audit_scripts(args.session_dir)
         violations += audit_batches(args.session_dir, args.workspace)
         violations += audit_workspace_links(args.workspace)
+        candidates = audit_decode.review_candidates(args.session_dir, args.workspace)
     except (OSError, ValueError) as exc:
         print(f"Erreur : {exc}", file=sys.stderr)
-        return 2
+        return 3
+    code = 1 if violations else 2 if candidates else 0
+    if args.json:
+        report = {
+            "exit": code,
+            "violations": [dataclasses.asdict(v) for v in violations],
+            "a_relire": [c.to_json() for c in candidates],
+        }
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return code
     for v in violations:
         print(v.render())
     if violations:
         rules = sorted({v.rule for v in violations})
         print(f"Audit en échec : {len(violations)} violation(s) ({', '.join(rules)})")
-        return 1
-    print(f"Audit réussi : {len(files)} transcription(s), aucune violation")
-    return 0
+    elif not candidates:
+        print(f"Audit réussi : {len(files)} transcription(s), aucune violation")
+    else:
+        print(f"Audit sans violation : {len(files)} transcription(s), mais des éléments à relire")
+    if candidates:
+        print(f"À relire ({len(candidates)}, {audit_decode.RULE}) :")
+        for c in candidates:
+            print(f"  {c.render()}")
+    return code
