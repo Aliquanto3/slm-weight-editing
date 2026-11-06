@@ -23,8 +23,15 @@ from pathlib import Path
 import numpy as np
 
 from slm_weight_editing.gguf_file import GGUFFile, TensorInfo, read_gguf
+from slm_weight_editing.lm_head import find_embed
 from slm_weight_editing.ollama_store import OllamaModel, load_model
-from slm_weight_editing.q8_0 import QK8_0, bf16_bytes_to_f32, quantize_q8_0, split_blocks
+from slm_weight_editing.q8_0 import (
+    BLOCK_BYTES,
+    QK8_0,
+    bf16_bytes_to_f32,
+    quantize_q8_0,
+    split_blocks,
+)
 from slm_weight_editing.safetensors_file import SafeTensor, open_checkpoint
 
 # Édition publiée du MIT (reference-mit.md) : base, dépôt et sha256 des octets bf16 bruts.
@@ -62,8 +69,15 @@ _HF_TO_GGUF = (
         "token_embd.weight",
         False,
     ),
+    # lm_head détaché (CAP-10) : le GGUF officiel n'a pas d'output.weight, il est ajouté en copie
+    # Q8_0 de token_embd (gguf_add_output). Accepté seulement si le diff porte le détachement.
+    (re.compile(r"^lm_head\.weight$"), "output.weight", False),
 )
 TIED_EMBEDDING = "token_embd.weight"
+OUTPUT_WEIGHT = "output.weight"
+PROTOCOL_GAP = (
+    "lm_head détaché des embeddings : écart de protocole avec l'édition du MIT (embeddings liés)"
+)
 # Blocs Q8_0 quantifiés par tranche : pic mémoire borné (token_embd : 254 M valeurs).
 _QUANT_CHUNK_BLOCKS = 1 << 18
 
@@ -156,6 +170,22 @@ def _check_tied(checkpoint: str | Path, edited: dict[str, SafeTensor], gguf: GGU
         raise ReportError(f"embed_tokens visé mais {config} déclare tie_word_embeddings: false")
 
 
+def _row_bytes(st: SafeTensor) -> int:
+    """Octets Q8_0 d'une ligne HF (les blocs de 32 courent le long de la ligne)."""
+    return st.shape[1] // QK8_0 * BLOCK_BYTES
+
+
+def _lm_head_rows(lm_head: SafeTensor, embed: SafeTensor, intermediate: str) -> list:
+    """Lignes de `lm_head` qui diffèrent de l'`embed_tokens` du checkpoint : (indice, Q8_0)."""
+    if len(lm_head.shape) != 2 or lm_head.shape[1] % QK8_0:
+        raise ReportError(f"{lm_head.name} : forme {list(lm_head.shape)} non quantifiable en Q8_0")
+    rows, cols = lm_head.shape
+    mine = np.frombuffer(lm_head.read_bytes(), np.uint8).reshape(rows, 2 * cols)
+    theirs = np.frombuffer(embed.read_bytes(), np.uint8).reshape(rows, 2 * cols)
+    changed = np.flatnonzero((mine != theirs).any(axis=1)).tolist()
+    return [(r, quantize_q8_0(bf16_bytes_to_f32(mine[r].tobytes()), intermediate)) for r in changed]
+
+
 def q8_0_gap(official: bytes, recomputed: bytes, ne0: int, limit: int = 5) -> dict:
     """Écart entre deux tenseurs Q8_0 : blocs, échelles, quanta et octets différents."""
     d_o, q_o = split_blocks(official)
@@ -186,18 +216,25 @@ def q8_0_gap(official: bytes, recomputed: bytes, ne0: int, limit: int = 5) -> di
     }
 
 
-def fidelity_check(
-    controls: list[tuple[str, SafeTensor]], gguf: GGUFFile, intermediate: str
-) -> dict:
-    """Requantifie chaque tenseur témoin et compare aux octets du GGUF officiel."""
+def fidelity_check(controls: list[tuple], gguf: GGUFFile, intermediate: str) -> dict:
+    """Requantifie chaque tenseur témoin et compare aux octets du GGUF officiel.
+
+    Un témoin est (origine, tenseur) ou (origine, tenseur, nom GGUF rapporté) : l'`embed_tokens`
+    de la base, copié en `output.weight`, se compare à `token_embd` mais se rapporte sous le nom
+    de la sortie.
+    """
     results = []
-    for origin, st in controls:
+    for origin, st, *shown in controls:
         info = gguf.tensor(gguf_name(st.name))
         _check_pair(st, info)
         gap = q8_0_gap(
             gguf.read_tensor_bytes(info.name), quantize_tensor(st, intermediate), info.dims[0]
         )
-        entry = {"origin": origin, "hf_name": st.name, "gguf_name": info.name}
+        entry = {
+            "origin": origin,
+            "hf_name": st.name,
+            "gguf_name": shown[0] if shown else info.name,
+        }
         entry |= {"ok": gap["blocks_differing"] == 0 and gap["bytes_differing"] == 0}
         if not entry["ok"]:
             entry["gap"] = gap
@@ -277,8 +314,12 @@ def report_gguf(
     intermediate: str = "f32",
     command: str | None = None,
     provenance: dict | None = None,
+    lm_head_detached: bool = False,
 ) -> ReportResult:
-    """`provenance` ({"base": {...}, "edit": {...}}) décrit l'édition dans diff.json.
+    """`lm_head_detached` : le diff de séance porte un détachement de `lm_head` (CAP-10) ; le
+    GGUF reçoit alors un `output.weight` Q8_0 (copie de `token_embd`, lignes éditées requantifiées).
+
+    `provenance` ({"base": {...}, "edit": {...}}) décrit l'édition dans diff.json.
 
     Sans elle, l'édition est celle du MIT si `expected_sha256` est omis (valeurs par défaut) ;
     avec des sha256 fournis sans provenance (ex. une séance), base et dépôt restent inconnus
@@ -303,6 +344,7 @@ def report_gguf(
             intermediate=intermediate,
             command=command,
             provenance=provenance,
+            lm_head_detached=lm_head_detached,
         )
     except BaseException:
         # Un échec ne laisse aucune sortie d'une séance précédente : `ollama create` ne doit pas
@@ -328,6 +370,7 @@ def _report(
     intermediate: str,
     command: str | None,
     provenance: dict | None,
+    lm_head_detached: bool,
 ) -> ReportResult:
     expected = WSP_EDITED_SHA256 if expected_sha256 is None else expected_sha256
     if provenance is None:
@@ -354,17 +397,36 @@ def _report(
         got = sha256_bytes(edited[hf_name].read_bytes())
         if got != want:
             raise ShaMismatchError(f"{hf_name} : sha256 {got}, attendu {want} ; report refusé")
+    lm_heads = [n for n in expected if gguf_name(n) == OUTPUT_WEIGHT]
+    if lm_heads and not lm_head_detached:
+        raise ReportError(
+            f"{lm_heads[0]} visé sans détachement déclaré par le diff de séance : report refusé"
+        )
+    if lm_head_detached and len(lm_heads) != 1:
+        raise ReportError(
+            "le diff déclare un détachement de lm_head mais ne porte pas lm_head.weight"
+        )
+    embed_name = find_embed(edited) if lm_head_detached else None
     targets: list[tuple[SafeTensor, TensorInfo]] = []
     for hf_name in expected:
+        if hf_name in lm_heads:
+            _check_pair(edited[hf_name], gguf.tensor(TIED_EMBEDDING))
+            if edited[hf_name].shape != edited[embed_name].shape:
+                raise ReportError(f"{hf_name} et {embed_name} : formes différentes")
+            continue
         name = gguf_name(hf_name)
         if name is None:
             raise ReportError(f"{hf_name} : pas de correspondance GGUF vérifiée")
         st, info = edited[hf_name], gguf.tensor(name)
         _check_pair(st, info)
         targets.append((st, info))
-    if any(info.name == TIED_EMBEDDING for _, info in targets):
+    if lm_head_detached:
+        if OUTPUT_WEIGHT in gguf.tensors:
+            raise ReportError(f"lm_head détaché mais le GGUF officiel a déjà un {OUTPUT_WEIGHT}")
+    elif any(info.name == TIED_EMBEDDING for _, info in targets):
         _check_tied(checkpoint, edited, gguf)
     unwitnessed = [info.name for st, info in targets if not is_witness(st.name)]
+    unwitnessed += [OUTPUT_WEIGHT] * len(lm_heads)
     if unwitnessed and base is None:
         raise ReportError(
             f"{', '.join(unwitnessed)} : aucun témoin de même nature ; --base-checkpoint requis "
@@ -379,6 +441,12 @@ def _report(
     ]
     if base is not None:
         for hf_name in expected:
+            if hf_name in lm_heads:
+                # La base n'a pas de lm_head : son original est l'embed_tokens, copié en sortie.
+                source = find_embed(base)
+                origin = "checkpoint de base, embed_tokens d'origine (copie de sortie)"
+                controls.append((origin, base[source], OUTPUT_WEIGHT))
+                continue
             if hf_name not in base:
                 raise ReportError(f"{hf_name} absent du checkpoint de base {base_checkpoint}")
             controls.append(("checkpoint de base, original du tenseur visé", base[hf_name]))
@@ -395,7 +463,7 @@ def _report(
         )
 
     # 3. Requantification des tenseurs visés et réécriture des seules plages concernées.
-    entries, patches = [], []
+    entries, patches, embed_after = [], [], None
     for st, info in targets:
         before = gguf.read_tensor_bytes(info.name)
         after = quantize_tensor(st, intermediate)
@@ -403,7 +471,8 @@ def _report(
             raise ReportError(
                 f"{info.name} : {len(after)} octets requantifiés, {info.n_bytes} attendus"
             )
-        patches.append((info.offset, after))
+        patches.append((info.name, 0, after))
+        embed_after = after if info.name == TIED_EMBEDDING else embed_after
         hf_before = sha256_bytes(base[st.name].read_bytes()) if base is not None else None
         entries.append(
             {
@@ -421,15 +490,66 @@ def _report(
                 "gguf_blocks_changed": q8_0_gap(before, after, info.dims[0])["blocks_differing"],
             }
         )
+    lm_rows: list[tuple[int, bytes]] = []
+    if lm_heads:
+        lm_head = edited[lm_heads[0]]
+        lm_rows = _lm_head_rows(lm_head, edited[embed_name], intermediate)
+        before = gguf.read_tensor_bytes(TIED_EMBEDDING)
+        # output.weight démarre en copie de token_embd (édité s'il l'est), puis les lignes de
+        # lm_head qui diffèrent de l'embed édité sont requantifiées.
+        if embed_after is not None:
+            patches.append((OUTPUT_WEIGHT, 0, embed_after))
+        patches += [(OUTPUT_WEIGHT, row * _row_bytes(lm_head), data) for row, data in lm_rows]
+        reference = embed_after if embed_after is not None else before
+        info = gguf.tensor(TIED_EMBEDDING)
+        entries.append(
+            {
+                "hf_name": lm_head.name,
+                "gguf_name": OUTPUT_WEIGHT,
+                "ggml_type": info.type_name,
+                "hf_shape": list(lm_head.shape),
+                "gguf_dims": list(info.dims),
+                "gguf_offset": None,
+                "gguf_n_bytes": info.n_bytes,
+                "hf_bf16_sha256_before": (
+                    sha256_bytes(base[find_embed(base)].read_bytes()) if base is not None else None
+                ),
+                "hf_bf16_sha256_after": sha256_bytes(lm_head.read_bytes()),
+                "gguf_sha256_before": sha256_bytes(before),
+                "gguf_sha256_after": None,
+                "gguf_blocks_changed": sum(
+                    q8_0_gap(
+                        reference[r * _row_bytes(lm_head) : (r + 1) * _row_bytes(lm_head)],
+                        data,
+                        info.dims[0],
+                    )["blocks_differing"]
+                    for r, data in lm_rows
+                ),
+                "rows_edited": [r for r, _ in lm_rows],
+            }
+        )
     gguf_path, modelfile = paths.gguf, paths.modelfile
     # Modelfile rendu avant l'écriture du GGUF : un texte non transcriptible n'écrit rien.
     modelfile_text = render_modelfile(gguf_path, official)
     partial = gguf_path.with_name(gguf_path.name + ".partial")
-    shutil.copyfile(official.model_blob, partial)
+    out_gguf = gguf
+    if lm_heads:
+        from slm_weight_editing.gguf_add_output import add_output_weight
+
+        partial.unlink(missing_ok=True)
+        add_output_weight(official.model_blob, partial, store)
+        out_gguf = read_gguf(partial)
+    else:
+        shutil.copyfile(official.model_blob, partial)
     with partial.open("r+b") as f:
-        for offset, data in patches:
-            f.seek(offset)
+        for name, offset, data in patches:
+            f.seek(out_gguf.tensor(name).offset + offset)
             f.write(data)
+    if lm_heads:
+        output_bytes = out_gguf.read_tensor_bytes(OUTPUT_WEIGHT)
+        entries[-1]["gguf_sha256_after"] = sha256_bytes(output_bytes)
+    for entry in entries:
+        entry["gguf_offset"] = out_gguf.tensor(entry["gguf_name"]).offset
     os.replace(partial, gguf_path)
 
     # 4. Modelfile et diff vérifiable (chemins personnels masqués : le diff se publie).
@@ -447,9 +567,11 @@ def _report(
             "source_sha256": source_sha,
             "output": gguf_path.name,
             "output_sha256": sha256_file(gguf_path),
-            "alignment": gguf.alignment,
-            "data_offset": gguf.data_offset,
+            "alignment": out_gguf.alignment,
+            "data_offset": out_gguf.data_offset,
         },
+        "lm_head_detached": bool(lm_heads),
+        "protocol_gap": PROTOCOL_GAP if lm_heads else None,
         "fidelity": {k: fidelity[k] for k in ("intermediate", "controls", "passed", "ok")}
         | {"target_originals_checked": base is not None},
         "modelfile": {"renderer": official.renderer, "parser": official.parser},

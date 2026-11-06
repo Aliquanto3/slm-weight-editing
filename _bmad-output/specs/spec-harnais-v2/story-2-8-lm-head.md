@@ -1,5 +1,5 @@
 ---
-status: decided
+status: review
 story: "2.8"
 title: lm_head détaché, n'éditer que la sortie (CAP-10)
 ---
@@ -78,3 +78,53 @@ Anaël a levé ses points d'arrêt de relecture le 2026-11-06 (« Retire mes poi
 3. Permis à tout moment. On copie l'embed courant de `work/` (éventuellement déjà édité). Le diff rejoue les transformations dans l'ordre, donc le résultat reste vérifiable.
 4. Champ `lm_head_detached` dans le rapport et mention « écart de protocole » dans la comparaison au MIT.
 5. Story codée sans attendre l'essai 2.7. CAP-10 sort de s2 si l'essai 2.7 échoue, ou si le GGUF détaché dépasse le témoin de plus de 25 % en taille ou de 20 % en temps de réponse médian au banc.
+
+## Réalisation (2026-11-06)
+
+Codée sans attendre l'essai Ollama de 2.7 (décision 5) : la commande ne sert en s2 que si l'essai conclut « CAP-10 maintenu » et si le GGUF détaché reste sous 25 % de taille et 20 % de temps de réponse médian de plus que le témoin.
+
+- Nouvelle commande `detach-lm-head` (module `lm_head.py`, parser et aiguillage dans `harness.py`) : verrou de séance, refus après le gel, une fois, ligne `detach_lm_head` au journal (source, sha256 de l'embed et de `lm_head`, sha256 du fichier réécrit, sha256 avant et après de `config.json`, clés écrites). Écriture : `model.safetensors` réécrit avec le tenseur en plus (option (a), remplacement atomique) ; refus d'un checkpoint à `model.safetensors.index.json`.
+- `freeze.py` : `FORMAT` `edit-diff-v2` (v1 toujours lu), champ `detached_lm_head`, entrée `added` pour `lm_head.weight` (toujours émise, même sans édition : le détachement doit se rejouer), `config.json` délié reconnu seulement si la transformation recalculée redonne le sha256 journalisé, rejeu par `apply-diff`.
+- `report_gguf.py` : `lm_head.weight` vers `output.weight`, `output.weight` ajouté par `add_output_weight` puis patch par ligne, témoin de fidélité `output.weight` (embed de la base requantifié contre `token_embd`), champs `lm_head_detached` et `protocol_gap` dans `diff.json`. `compare_edits.py` : « tenseur ajouté » et « écart de protocole ». Consigne de séance : commande recopiable, sans chevron ni crochet.
+
+### Écarts à la spec
+
+- Le tenseur ajouté figure toujours au diff, même inchangé (entrée `changed: 0`) ; la spec ne le disait pas, mais sans lui apply-diff ne peut pas rejouer le détachement.
+- Un détachement journalisé avec `lm_head.weight` entièrement égal à `embed_tokens` reste un « tenseur modifié » dans le décompte du gel (`tensors_changed`).
+- `test_report_embed_refuses_a_distinct_lm_head` et les deux autres tests du cas lié sont inchangés et verts (sans diff détaché, `lm_head` reste refusé) ; seul `gguf_name("lm_head.weight")` change de valeur.
+- Le nom du tenseur dans le GGUF est celui de la copie de `token_embd` ; le report ne vérifie pas un `lm_head` hors racine (`model.lm_head.weight` refusé).
+- Non fait : le rapport réel sur le blob officiel et l'essai Ollama (à Anaël) ; mesure de taille et de temps de réponse de la décision 5.
+
+## Revue
+
+### Passe 1 (2026-11-06, SHA revu 90cccf8)
+
+Base à jour (main a691faa). Tests ciblés : lm_head, freeze, audit_transcript, session_workspace, report_gguf, harness, compare_edits, gguf_add_output verts (invariants 10 / 28 / 73 inclus) ; les trois tests ajoutés échouent sur 90cccf8.
+
+- Important · medium · second avis 1 · corrigé : un `work/config.json` relié (`tie_word_embeddings: true`) après le détachement passait le gel ; le diff publiait une config déliée alors que les lots mesurés ignoraient `lm_head`. Le gel refuse désormais une config de `work/` qui n'est plus déliée (`_check_detached_config`). Test `test_config_relinked_after_detach_is_refused_at_freeze`.
+- Important · medium · second avis 2 · corrigé : tenseur, config et journal écrits sans reprise ; une erreur entre deux bloquait la séance (detach « déjà délié », gel « tenseur en trop »). Le fichier d'origine est gardé par renommage (`.detach-bak`) et work/ est restauré en cas d'erreur avant la ligne de journal. Reste une fenêtre entre deux renommages si le processus est tué. Test `test_detach_interrupted_before_the_journal_line_restores_work`.
+- Important · low → medium · second avis 3 · corrigé : un `config.json` modifié avant le détachement donnait un diff que le gel produisait mais qu'apply-diff refusait de rejouer. `detach-lm-head` refuse une config qui diffère de la base à l'ouverture, et le gel refuse un détachement dont la transformation ne se rejoue pas sur l'original. Test `test_detach_refuses_a_config_modified_since_open`.
+- Rejeté · low · second avis 4 : « s'il existe » du critère 1 porte sur `text_config`, pas sur la clé ; écrire `text_config.tie_word_embeddings: false` dès que `text_config` existe est le comportement demandé (et le plus sûr pour Qwen3.5).
+- Nit · low · second avis 5 · corrigé : la comparaison n'était pas tautologique (elle confrontait la consigne rendue à la liste blanche), mais elle suivait la constante ; liste écrite en dur.
+- Complexité : 0 constat (pas de structure qui grossit parcourue à chaque événement en plus de l'existant).
+
+### Passe 2 (2026-11-06, SHA revu 23149d1)
+
+Relu `90cccf8..23149d1`. Tests ciblés verts (lm_head, freeze, audit_transcript, session_workspace, harness, report_gguf), ruff vert.
+
+- Important · medium · revue · corrigé : la sauvegarde `model.safetensors.detach-bak` était dans work/ ; un processus tué après la ligne de journal la laissait, et le gel la publiait comme fichier ajouté (`files_changed`, sha256_before nul : copie complète du modèle qu'apply-diff ne peut pas produire) ; tué entre les deux renommages, work/ n'avait plus de safetensors et rien ne la reprenait. Sauvegardes (tenseur et config) déplacées dans `<séance>/detach-bak/`, hors de work/ (ni haché, ni audité, ni publié) ; le détachement suivant restaure work/ s'il n'y a pas de ligne de journal, nettoie sinon, et retire les temporaires `.tmp` laissés dans work/. Tests `test_detach_killed_between_the_two_renames_is_recovered_by_the_next_detach`, `test_backup_left_after_the_journal_line_is_not_a_work_file`.
+- Nit · low · revue · corrigé : une `config.json` absente de la base mais ajoutée dans work/ passait le refus « modifiée depuis l'ouverture » et n'était refusée qu'au gel ; refus dès le détachement.
+- Nit · low · revue · rejeté : `os.replace` sous Windows sur le fichier d'embeddings ; `SafeTensor` ne garde aucun descripteur ouvert (lecture par `with`), et le verrou de séance exclut lots et sondes pendant le détachement.
+- Nit · low · revue · rejeté : restauration en échec dans le `except` ; l'exception d'origine reste chaînée et la sauvegarde, hors de work/, est reprise au détachement suivant.
+- `_check_detached_config` et le refus d'une transformation non rejouable au gel : conformes (une config déliée avec d'autres modifications reste signalée par `files_changed`).
+- Complexité : 0 constat.
+
+### Passe 3 (2026-11-06, SHA revu 47a84c5)
+
+Relu `23149d1..47a84c5`, puis fusion de main (e512639 : stories 2.4 et 2.5, crochet de refus, OPERATEUR.md, BLOCAGES.md au gel) par merge commit. Conflit d'`audit_transcript.py` résolu en gardant `ALLOWED_WAYS` / `refusal_message` et `detach-lm-head` dans `ALLOWED_SUBCOMMANDS` et la liste des commandes des voies permises ; la liste fermée des appels permis de `test_espace_lecture.py` inclut la commande detach de la consigne (le crochet la laisse passer). `freeze.py`, CLI et consignes fusionnés sans conflit, vérifiés. Tests ciblés verts (lm_head, freeze, audit_transcript, session_workspace, espace_lecture, harness, report_gguf, probe ; invariants 10 / 28 / 73 inclus), ruff vert.
+
+- Vérifié · `<séance>/detach-bak/` : hors de `work/`, donc ni haché (`work_file_hashes`), ni publié au gel (seuls work/ et l'original sont lus), ni dans `files_changed` ; non écrivable par l'éditeur (crochet : écriture limitée à scripts/, notes/, EDITION.md, work/*.safetensors ; run-script : work/ et scripts/) ; lisible comme tout l'espace, sans effet (copie de la base). Une sauvegarde d'un détachement journalisé n'est jamais restaurée (un seul détachement par séance, `_recover` nettoie seulement) ; un `.tmp` laissé dans `detach-bak/` est déplacé puis retiré de work/ dans le même appel.
+- Nit · low · revue · reporté : processus tué avant la ligne de journal, puis l'éditeur écrit dans `work/model.safetensors` avant de relancer `detach-lm-head` : `_recover` restaure la sauvegarde et efface ces écritures sans le dire. Cas rare (état déjà incohérent, refusé au gel) ; piste : ne restaurer le tenseur que si le fichier de work/ manque ou contient `lm_head.weight`, et l'écrire dans la sortie.
+- Nit · low · revue · reporté : si `_append_journal` lève après avoir écrit la ligne (fsync), work/ est restauré alors que le journal dit « détaché » : gel et détachement refusés. Fenêtre très étroite, même famille que la passe 1.
+- Nit · low · revue · corrigé : docstrings de `workspace.py` disaient « quatre commandes » (cinq désormais).
+- Complexité : 0 constat.

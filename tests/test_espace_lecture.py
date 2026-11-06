@@ -416,6 +416,7 @@ def _permitted_calls(ws: Path) -> list[tuple[str, dict]]:
         "run-script": "scripts/edit.py --session s1 --sessions-root sessions --timeout 600",
         "probe": "--session s1 --sessions-root sessions --texts notes/textes.jsonl "
         "--capture resid --positions all",
+        "detach-lm-head": "--session s1 --sessions-root sessions",
     }
     for prefix in workspace.allowed_commands(REPO):
         sub = prefix.rsplit(" ", 1)[1]
