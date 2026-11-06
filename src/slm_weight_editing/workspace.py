@@ -1,6 +1,6 @@
 """Espace de séance hors du dépôt (story 5, CAP-6), créé par Anaël : `session-workspace`.
 
-`<out>/` reçoit `.claude/settings.json` (dontAsk, liste blanche de trois commandes, lectures et
+`<out>/` reçoit `.claude/settings.json` (dontAsk, liste blanche de quatre commandes, lectures et
 écritures bloquées hors de l'espace), `CLAUDE.md`, `CONSIGNE.md`, `scripts/`, `data/` (copie des
 fichiers train) et `sessions/` (dossier des séances du harnais, avec `<id>/work/`). Le chemin du
 dépôt n'est écrit qu'ici, à la création, hors du dépôt. L'agent éditeur lancé dans `<out>/` ne
@@ -17,11 +17,13 @@ import sys
 from pathlib import Path
 
 from slm_weight_editing import harness
+from slm_weight_editing.probe import DEFAULT_PROBE_BUDGET, DEFAULT_PROBE_DISK_MAX
 from slm_weight_editing.script_runner import (
     DATA_DIR,
     DEFAULT_MAX_TIMEOUT,
     DEFAULT_THREADS,
     DEFAULT_TIMEOUT,
+    PROBES_DIR,
     RUNS_DIR,
     SCRIPTS_DIR,
     _inside,
@@ -32,7 +34,7 @@ from slm_weight_editing.script_runner import (
 SESSIONS_DIR = harness.WORKSPACE_SESSIONS_DIR
 NOTES_DIR = "notes"
 TEMPLATES = Path(__file__).with_name("seance")
-ALLOWED_SUBCOMMANDS = ("run-batch", "session-status", "run-script")
+ALLOWED_SUBCOMMANDS = ("run-batch", "session-status", "run-script", "probe")
 # Commandes lues ou exécutées sans règle en mode dontAsk (lecture seule) ou génériques : refusées.
 DENIED_COMMANDS = (
     "cat head tail less more grep egrep fgrep rg find ls dir tree type file stat wc du df od xxd "
@@ -97,7 +99,7 @@ CUDA_EXTRA = " --extra cuda"
 
 
 def allowed_commands(repo: Path, cuda: bool = False) -> list[str]:
-    """Préfixes exacts des trois commandes de l'éditeur (forme vérifiée par l'audit).
+    """Préfixes exacts des quatre commandes de l'éditeur (forme vérifiée par l'audit).
 
     Le dépôt n'y figure pas : `env.UV_PROJECT` des réglages le fixe (un chemin hors de l'espace
     cité par `--project` est refusé en `dontAsk` avec `blockReadsOutsideWorkingDirectories`).
@@ -149,6 +151,7 @@ def build_settings(workspace: Path, repo: Path, session_id: str, cuda: bool = Fa
         "Edit(./CLAUDE.md)",
         "Edit(./CONSIGNE.md)",
         f"Edit(./{RUNS_DIR}/**)",
+        f"Edit(./{PROBES_DIR}/**)",
         f"Edit(./{DATA_DIR}/**)",
         f"Edit({sessions}/{harness.REGISTRY_FILE})",
         f"Edit({sessions}/*/{harness.STATE_FILE})",
@@ -197,12 +200,14 @@ def render(
     threads: int = DEFAULT_THREADS,
     timeout: float = DEFAULT_TIMEOUT,
     max_timeout: float = DEFAULT_MAX_TIMEOUT,
+    probe_budget: int = DEFAULT_PROBE_BUDGET,
 ) -> str:
     text = (TEMPLATES / name).read_text(encoding="utf-8")
     listing = ", ".join(f"`{DATA_DIR}/{n}`" for n in data)
     for key, value in (
         ("<ID_SEANCE>", session_id),
         ("<BUDGET>", str(budget)),
+        ("<BUDGET_PROBE>", f"{probe_budget:,}".replace(",", " ")),
         ("<EXTRA>", CUDA_EXTRA if cuda else ""),
         ("<DONNEES>", listing),
         ("<SCRIPT_THREADS>", str(threads)),
@@ -245,6 +250,8 @@ def create_workspace(
     script_threads: int = DEFAULT_THREADS,
     script_timeout: float = DEFAULT_TIMEOUT,
     script_max_timeout: float = DEFAULT_MAX_TIMEOUT,
+    probe_budget: int = DEFAULT_PROBE_BUDGET,
+    probe_disk_max: int = DEFAULT_PROBE_DISK_MAX,
 ) -> Path:
     """Ouvre la séance dans `<out>/sessions` et écrit l'espace de l'éditeur ; renvoie `<out>`."""
     if cuda and not cuda_platform():
@@ -269,6 +276,8 @@ def create_workspace(
         base_checkpoint,
         base_revision=base_revision,
         sessions_root=out / SESSIONS_DIR,
+        probe_budget=probe_budget,
+        probe_disk_max=probe_disk_max,
     )
     # Séance, racine et données imposées aux commandes lancées depuis l'espace (harnais, lanceur).
     info = {
@@ -281,6 +290,8 @@ def create_workspace(
         "script_threads": script_threads,
         "script_timeout": script_timeout,
         "script_max_timeout": script_max_timeout,
+        "probe_budget": probe_budget,
+        "probe_disk_max": probe_disk_max,
     }
     (out / harness.WORKSPACE_FILE).write_text(
         json.dumps(info, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
@@ -305,6 +316,7 @@ def create_workspace(
             threads=script_threads,
             timeout=script_timeout,
             max_timeout=script_max_timeout,
+            probe_budget=probe_budget,
         )
         (out / name).write_text(text, encoding="utf-8", newline="\n")
     return out
@@ -348,6 +360,18 @@ def add_parser(sub: argparse._SubParsersAction) -> None:
         default=DEFAULT_MAX_TIMEOUT,
         help="délai maximum qu'un script peut demander, en secondes (défaut 3600)",
     )
+    p.add_argument(
+        "--probe-budget",
+        type=int,
+        default=DEFAULT_PROBE_BUDGET,
+        help="budget de probe, en jetons passés en forward (défaut 2000000)",
+    )
+    p.add_argument(
+        "--probe-disk-max",
+        type=int,
+        default=DEFAULT_PROBE_DISK_MAX,
+        help="plafond cumulé des captures de probe, en octets (défaut 20 Go)",
+    )
     p.set_defaults(func=run)
 
 
@@ -364,6 +388,8 @@ def run(args: argparse.Namespace) -> int:
             script_threads=args.script_threads,
             script_timeout=args.script_timeout,
             script_max_timeout=args.script_max_timeout,
+            probe_budget=args.probe_budget,
+            probe_disk_max=args.probe_disk_max,
         )
     except harness.HarnessError as exc:
         print(f"Erreur : {exc}", file=sys.stderr)

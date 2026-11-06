@@ -6,7 +6,7 @@ interdit : web, lectures interdites, exécution du modèle hors du harnais, écr
 séance, ouverture de séance par l'agent, commandes hors liste blanche. Avec le dossier de séance,
 compare `base_tensors_sha256` de la ligne `open` du journal à une référence fournie par Anaël.
 
-La liste blanche fait la règle : toute commande shell autre que les trois commandes de l'espace
+La liste blanche fait la règle : toute commande shell autre que les quatre commandes de l'espace
 (`uv run[ --extra cuda] slm-weight-editing run-batch|session-status|run-script`, le dépôt étant
 fixé par `env.UV_PROJECT` de `.claude/settings.json`) échoue, comme
 toute lecture hors de l'espace et toute écriture hors de `scripts/`, `notes/`, `EDITION.md` et
@@ -43,7 +43,7 @@ RULES = {
     "ouverture-seance": "ouverture de séance par l'agent (réservée à Anaël)",
     "gel-seance": "gel de séance par l'agent (réservé à Anaël)",
     "deverrouillage-seance": "déverrouillage de séance par l'agent (réservé à Anaël)",
-    "commande-hors-liste": "commande hors des trois commandes de l'espace de séance",
+    "commande-hors-liste": "commande hors des quatre commandes de l'espace de séance",
     "environnement": "affectation de variable d'environnement devant une commande",
     "lien": "création de lien symbolique, de jonction ou de lien physique",
     "python-hors-lanceur": "python ou uv run python lancé hors de run-script",
@@ -60,7 +60,7 @@ RULES = {
     "base-differente": "séance ouverte sur une base qui diffère de la révision publiée",
 }
 
-ALLOWED_SUBCOMMANDS = ("run-batch", "session-status", "run-script")
+ALLOWED_SUBCOMMANDS = ("run-batch", "session-status", "run-script", "probe")
 # Aucun module du harnais n'est importable par l'éditeur (run-script les refuse aussi).
 ALLOWED_INTERNAL_MODULES: tuple[str, ...] = ()
 # Outils de séance ; tout autre outil (WebFetch, WebSearch, Agent, Skill, mcp__*...) échoue.
@@ -496,7 +496,7 @@ def _write_allowed(path: str, ctx: Context) -> bool:
     )
 
 
-_BOUND_OPTIONS = ("--session", "--sessions-root", "--data")
+_BOUND_OPTIONS = ("--session", "--sessions-root", "--data", "--texts")
 
 
 def _check_options(part: str, ctx: Context) -> list[tuple[str, str]]:
@@ -521,6 +521,8 @@ def _check_options(part: str, ctx: Context) -> list[tuple[str, str]]:
             ok = ctx.session_id is None or value == ctx.session_id
         elif option == "--sessions-root":
             ok = full == f"{ctx.workspace}/sessions"
+        elif option == "--texts":
+            ok = full is not None and full.startswith(f"{ctx.workspace}/")
         else:
             ok = full is not None and full.startswith(f"{ctx.workspace}/data/")
         if not ok:
@@ -529,7 +531,7 @@ def _check_options(part: str, ctx: Context) -> list[tuple[str, str]]:
 
 
 def check_shell(command: str, ctx: Context) -> list[tuple[str, str]]:
-    """Liste blanche : chaque sous-commande doit être l'une des trois commandes de l'espace."""
+    """Liste blanche : chaque sous-commande doit être l'une des quatre commandes de l'espace."""
     found: list[tuple[str, str]] = []
     text = re.sub(r"\s2>&1\b", " ", command.replace("\r", ""))
     if re.search(r"\$\(|`|<\(|>|<", text):

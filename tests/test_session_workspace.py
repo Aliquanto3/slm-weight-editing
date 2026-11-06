@@ -102,7 +102,7 @@ def test_settings_json(ws):
     commands = [
         f"{tool}(uv run slm-weight-editing {sub} *)"
         for tool in ("Bash", "PowerShell")
-        for sub in ("run-batch", "session-status", "run-script")
+        for sub in ("run-batch", "session-status", "run-script", "probe")
     ]
     assert perms["allow"] == [
         *commands,
@@ -183,6 +183,8 @@ def test_instructions_are_rendered(ws):
     assert "<EXTRA>" not in (ws / "CLAUDE.md").read_text(encoding="utf-8")
     claude = (ws / "CLAUDE.md").read_text(encoding="utf-8")
     assert "<DEPOT>" not in claude and repo not in claude and "--project" not in claude
+    assert "uv run slm-weight-editing probe --session s1 --sessions-root sessions" in consigne
+    assert "<BUDGET_PROBE>" not in consigne and "`2 000 000` jetons" in consigne
 
 
 @pytest.fixture
@@ -200,20 +202,20 @@ def test_cuda_workspace_settings_carry_extra(ws_cuda):
     allow = json.loads((ws_cuda / ".claude" / "settings.json").read_text("utf-8"))["permissions"][
         "allow"
     ]
-    assert allow[:6] == [
+    assert allow[:8] == [
         f"{tool}(uv run --extra cuda slm-weight-editing {sub} *)"
         for tool in ("Bash", "PowerShell")
-        for sub in ("run-batch", "session-status", "run-script")
+        for sub in ("run-batch", "session-status", "run-script", "probe")
     ]
-    assert allow[6] == "Read(./**)"
-    assert not any("--extra" in rule for rule in allow[6:])
+    assert allow[8] == "Read(./**)"
+    assert not any("--extra" in rule for rule in allow[8:])
 
 
 def test_cuda_workspace_instructions_carry_extra(ws_cuda):
     repo = REPO.resolve().as_posix()
     consigne = (ws_cuda / "CONSIGNE.md").read_text(encoding="utf-8")
     base_cmd = "uv run --extra cuda slm-weight-editing"
-    for sub in ("run-batch", "session-status", "run-script scripts/NOM.py"):
+    for sub in ("run-batch", "session-status", "run-script scripts/NOM.py", "probe"):
         assert f"{base_cmd} {sub}" in consigne
     assert "<EXTRA>" not in consigne
     claude = (ws_cuda / "CLAUDE.md").read_text(encoding="utf-8")
