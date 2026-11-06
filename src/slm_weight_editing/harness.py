@@ -243,6 +243,10 @@ def _session_lock(directory: Path):
             lock.unlink(missing_ok=True)
 
 
+class RecoveryError(HarnessError):
+    """Reprise d'un détachement tué impossible (journal illisible) : rien n'est touché."""
+
+
 def recover_detach(directory: Path) -> str | None:
     """Reprise d'un `detach-lm-head` tué (story 2.9) : message écrit sur stderr, ou None.
 
@@ -250,7 +254,13 @@ def recover_detach(directory: Path) -> str | None:
     """
     from slm_weight_editing import lm_head  # import local : lm_head importe harness
 
-    message = lm_head.recover_interrupted(directory)
+    try:
+        message = lm_head.recover_interrupted(directory)
+    except ValueError as exc:  # journal illisible (ligne tronquée, non UTF-8) : rien n'est touché
+        raise RecoveryError(
+            f"reprise du détachement de lm_head impossible : {JOURNAL_FILE} illisible "
+            f"({type(exc).__name__}) ; work/ et {lm_head.BACKUP_DIR}/ laissés tels quels"
+        ) from exc
     if message:
         print(f"Reprise : {message}", file=sys.stderr)
     return message
@@ -270,6 +280,8 @@ def unlock_session(
         try:
             with _session_lock(directory):
                 recover_detach(directory)
+        except RecoveryError:
+            raise
         except HarnessError:
             pass  # verrou pris entre-temps : son détenteur reprend lui-même
         return None

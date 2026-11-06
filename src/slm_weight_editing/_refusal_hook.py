@@ -26,10 +26,26 @@ import sys
 import threading
 from pathlib import Path
 
-from slm_weight_editing import audit_transcript as audit
-
 BLOCAGES_HINT = "Si cette voie ne suffit pas, note le blocage dans notes/BLOCAGES.md."
 FAILURE_RULE = "crochet-en-echec"
+
+
+def _blocked(detail: str) -> None:
+    """Échec hors de `main` (import, fil) : code 2 et motif sur stderr, sans `onFailure`."""
+    try:
+        sys.stderr.write(f"Refus ({FAILURE_RULE}) : {detail}. {BLOCAGES_HINT}\n")
+        sys.stderr.flush()
+    finally:
+        os._exit(2)
+
+
+try:
+    from slm_weight_editing import audit_transcript as audit
+except BaseException as _exc:  # noqa: BLE001 - échec fermé dès l'import
+    if __name__ != "__main__":
+        raise
+    _blocked(f"import de l'audit impossible ({type(_exc).__name__})")
+
 # Échéance interne (s), sous `workspace.HOOK_TIMEOUT` (10 s) : le refus part avant le délai.
 DEADLINE = 6.0
 
@@ -130,6 +146,9 @@ def main(argv: list[str], deadline: float = DEADLINE) -> int:
 
 
 if __name__ == "__main__":
-    code = main(sys.argv)
-    sys.stdout.flush()
+    try:
+        code = main(sys.argv)
+        sys.stdout.flush()
+    except BaseException as _exc:  # noqa: BLE001 - fil non lancé, sortie impossible...
+        _blocked(f"crochet en échec ({type(_exc).__name__})")
     os._exit(code)  # sans attendre un fil d'analyse encore en cours après l'échéance

@@ -383,6 +383,19 @@ def test_c11_python_file_outside_scripts_is_refused(ws, rel):
         'import sys\nsys.path.insert(0, "notes")\nimport x',
         'import sys\nsys.path.append("notes")',
         'from sys import path\npath.append("notes")',
+        # Revue 2.9 : exécution sans `exec(` littéral.
+        'import builtins as b\nb.__dict__["exec"](open("notes/x.md").read())',
+        'import builtins\nvars(builtins)["ex" + "ec"](open("notes/x.md").read())',
+        'import sys\nsys.modules["bu" + "iltins"].__dict__["exec"](open("notes/x.md").read())',
+        'import json\ngetattr(json, "__buil" + "tins__")["exec"](open("notes/x.md").read())',
+        'f = getattr(print.__self__, "exec")\nf(open("notes/x.md").read())',
+        "s = ().__class__.__base__.__subclasses__()",
+        'import timeit\ntimeit.timeit(open("notes/x.md").read(), number=1)',
+        'import code\ncode.InteractiveInterpreter().runsource(open("notes/x.md").read())',
+        'import pdb\npdb.run(open("notes/x.md").read())',
+        'import pandas as pd\npd.read_pickle("notes/x.md")',
+        'import site\nsite.addsitedir("notes")',
+        'g = globals()\ng["ex" + "ec"] = 1',
     ],
 )
 def test_c11_script_executing_notes_is_refused(ws, code):
@@ -649,3 +662,44 @@ def test_c18_detach_in_a_created_workspace_end_to_end(ws, base, tmp_path, monkey
     assert code == 0, out
     for rule in ("lien", "etat-seance", "base-differente", "script-copie", "hors-espace-seance"):
         assert f"{rule} ·" not in out, out
+
+
+# --- Revue 2.9 : journal illisible à la reprise, crochet en échec hors de `main` ---------------
+
+
+@pytest.mark.parametrize("command", sorted(COMMANDS))
+def test_review_unreadable_journal_at_recovery_is_a_clear_refusal(sess, command):
+    kill_detach_before_the_journal_line(sess["dir"])
+    after_kill = _work_bytes(sess["work"])
+    journal = sess["dir"] / harness.JOURNAL_FILE
+    journal.write_bytes(journal.read_bytes() + b'{"event": "detach_lm_he')
+    if command == "unlock-verrou-mort":
+        _dead_lock(sess["dir"])
+    with pytest.raises(harness.RecoveryError, match="illisible"):
+        if command == "run-batch":
+            data = sess["root"] / "x-train.jsonl"
+            harness.run_batch(
+                "s1", "gsm8k", "train", data, thinking="off", sessions_root=sess["root"]
+            )
+        elif command == "probe":
+            probe.run_probe(
+                "s1", sess["root"] / "absent.jsonl", capture=["resid"], sessions_root=sess["root"]
+            )
+        else:
+            harness.unlock_session("s1", sess["root"])
+    assert _work_bytes(sess["work"]) == after_kill
+    assert (sess["dir"] / lm_head.BACKUP_DIR).is_dir()
+
+
+def test_review_hook_import_failure_exits_2_with_reason(ws):
+    script = Path(hook.__file__)
+    # `-S` : sans site-packages, l'import de `slm_weight_editing` échoue avant `main`.
+    proc = subprocess.run(
+        [sys.executable, "-I", "-S", "-B", str(script), str(ws)],
+        input=b"{}",
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    assert proc.returncode == 2, proc
+    assert b"crochet-en-echec" in proc.stderr

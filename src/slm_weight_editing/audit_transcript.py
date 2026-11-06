@@ -1156,6 +1156,19 @@ _IMPORT_PATH = re.compile(
     r"\bsys\s*\.\s*(?:path|meta_path|path_hooks|path_importer_cache)\b|\bPYTHONPATH\b"
     r"|\bfrom\s+sys\s+import\b[^\n#]*\b(?:path|meta_path|path_hooks)\b"
 )
+# Exécution d'un texte sans `exec(` littéral (revue 2.9) : accès dynamique aux fonctions natives
+# (`b.__dict__["exec"]`, `vars(builtins)`, `sys.modules`, `getattr(x, "ex" + "ec")`, dunder hors
+# des usages courants), modules qui exécutent une chaîne (`timeit`, `code`, `pdb`, `cProfile`,
+# `doctest`, `site`...) ou qui désérialisent du code (`read_pickle`, `shelve`, `allow_pickle`).
+_DYNAMIC_EXEC = re.compile(
+    r"\bbuiltins\b|\bsys\s*\.\s*modules\b|\b(?:vars|globals|locals)\s*\("
+    r"|\.\s*__(?!(?:init|name|doc|version|file|len|class|qualname|module|annotations)__)\w+__"
+    r"|\bgetattr\s*\(\s*[^,()]+,\s*(?![\"'][A-Za-z_]\w*[\"']\s*[,)])"
+    r"|\b(?:timeit|codeop|pdb|bdb|cProfile|doctest|zipimport|pkgutil|shelve|dill|joblib"
+    r"|cloudpickle|read_pickle)\b|\ballow_pickle\s*=\s*True"
+    r"|^\s*(?:import|from)\b[^\n#]*\b(?:code|profile|trace|site)\b",
+    re.MULTILINE,
+)
 
 
 def check_code_content(content: str, tool: str) -> list[tuple[str, str]]:
@@ -1175,9 +1188,9 @@ def check_code_content(content: str, tool: str) -> list[tuple[str, str]]:
         if m:
             found.append(("obfuscation", f"« {m.group(0)} »"))
         # Chemin d'import modifié : un module de notes/ (prose non auditée) deviendrait du code.
-        m = _IMPORT_PATH.search(variant)
+        m = _IMPORT_PATH.search(variant) or _DYNAMIC_EXEC.search(variant)
         if m:
-            found.append(("obfuscation", f"« {m.group(0)} »"))
+            found.append(("obfuscation", f"« {m.group(0).strip()} »"))
         # Noms de bibliothèques d'inférence découpés (`"to" + "rch"`) : forme compacte du code.
         compact = _compact(variant)
         for term in ("torch", "transformers", "llamacpp", "ollama", "tokenizers"):

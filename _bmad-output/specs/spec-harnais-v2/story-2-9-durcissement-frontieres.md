@@ -86,3 +86,18 @@ Tests : `tests/test_durcissement_frontieres.py`, un test (ou groupe paramétré)
 - Point 4 : `READ_PATH_KEYS` = `file_path`, `path`, `notebook_path`, `filePath`.
 - Point 5 : `lm_head.recover_interrupted` + `harness.recover_detach` (import local, message `Reprise : …` sur stderr), appelé sous le verrou par `session-unlock` (sous le verrou mort, ou un verrou pris s'il n'y en a pas), `session-freeze`, `run-batch` et `probe`. Après une erreur, `detach_lm_head` relit le journal : ligne présente, la sauvegarde part sans restaurer ; journal illisible, rien n'est touché.
 - Reports : la phrase de `CONSIGNE.md` « tout ce dossier se lit librement… par tes scripts » reste vraie pour les lectures prouvées mais ne dit pas qu'une autre mention de l'état de séance est refusée : à préciser dans une story de doc.
+
+## Revue
+
+### Passe 1 (2026-11-06, SHA revu 909481a)
+
+Base à jour (merge-base 62a83d2 = origin/main), pas de rebase.
+
+- Important, high, second avis 1 : `exec` atteint sans `exec(` littéral (`b.__dict__["exec"]`, `vars(builtins)`, `sys.modules`, `getattr(x, "ex"+"ec")`, `print.__self__`, `timeit`, `code`, `pdb`, `read_pickle`, `site.addsitedir`) : un script exécutait la prose de `notes/` sans constat (critère 11). Corrigé : `_DYNAMIC_EXEC` (obfuscation) dans `check_code_content` ; un refus de toute mention de `notes/` aurait fait tomber les `LEGIT_ANALYSIS_SCRIPTS` qui y écrivent et `probe --texts notes/…`. 12 cas ajoutés au test c11.
+- Important, medium, second avis 2 : un échec hors de `main` (import de l'audit, `thread.start`, flush) sortait en code 1, non bloquant si `onFailure` n'est pas reconnu. Corrigé : `_blocked` (code 2, motif sur stderr) autour de l'import et du `__main__` ; test en sous-processus `-S`.
+- Important, medium, second avis 3 : journal illisible à la reprise : `JSONDecodeError` brute, et `unlock` sans verrou l'avalait. Corrigé : `harness.RecoveryError` (HarnessError), rien n'est touché ; test paramétré sur les quatre commandes. Les autres lectures du journal (`used_batches`, gel) lèvent toujours `JSONDecodeError` : Pre-existing, hors story.
+- Nit, low, second avis 4 : échéance comptée depuis `main` : rejeté, le démarrage et l'import tiennent largement dans les 4 s de marge sous `HOOK_TIMEOUT`.
+- Nit, low, second avis 5 : seuil de temps du critère 7 : rejeté, seuil ×3 sous `CI` et rapport < 3, déjà tolérants.
+- Écart (a) du développeur (lignes en lecture prouvée exemptées, `Path(p).open().read()` refusé) : accepté, aucun refus affaibli. Écart (b) (`sys.path`… et fichiers de code hors de `scripts/`) : accepté, il durcit le critère 11.
+- Report : `onFailure: "block"` (Claude Code v2.1.295+) non vérifiable sans réseau ; à vérifier dans une vraie séance : un crochet qui sort en code 1 doit bloquer l'appel.
+- Complexité : 0 constat (`_DYNAMIC_EXEC` en temps linéaire).
