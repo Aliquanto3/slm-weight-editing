@@ -627,3 +627,47 @@ def test_report_gguf_refuses_a_gguf_that_already_has_output_weight(sess, tmp_pat
 def test_lm_head_name_maps_to_output_weight_only_at_the_root():
     assert gguf_name("lm_head.weight") == "output.weight"
     assert gguf_name("model.lm_head.weight") is None
+
+
+# --- Revue passe 1 : config reliée, config modifiée avant, écriture interrompue -----------------
+
+
+def test_config_relinked_after_detach_is_refused_at_freeze(sess):
+    # Les lots mesurés après le retour à tie true ignoraient lm_head : pas de diff délié.
+    detach(sess)
+    config = sess["work"] / "config.json"
+    config.write_bytes((sess["base"] / "config.json").read_bytes())
+    with pytest.raises(FreezeError, match="ne déclare plus tie_word_embeddings: false"):
+        freeze_it(sess)
+    assert harness.read_state(sess["dir"]).frozen is False
+    assert not (sess["dir"] / "freeze").exists()
+
+
+def test_detach_refuses_a_config_modified_since_open(sess):
+    config = sess["work"] / "config.json"
+    data = json.loads(config.read_text("utf-8"))
+    data["hidden_size"] = 12
+    config.write_text(json.dumps(data), "utf-8")
+    before = (sess["work"] / "model.safetensors").read_bytes()
+    with pytest.raises(HarnessError, match="modifié depuis l'ouverture"):
+        detach(sess)
+    assert (sess["work"] / "model.safetensors").read_bytes() == before
+    assert lm_head.detach_event(harness.read_journal(sess["dir"])) is None
+
+
+def test_detach_interrupted_before_the_journal_line_restores_work(sess, monkeypatch):
+    work = sess["work"]
+    model, config = (work / "model.safetensors").read_bytes(), (work / "config.json").read_bytes()
+
+    def fail(directory, entry):
+        raise OSError("disque plein")
+
+    monkeypatch.setattr(harness, "_append_journal", fail)
+    with pytest.raises(OSError, match="disque plein"):
+        detach(sess)
+    monkeypatch.undo()
+    assert (work / "model.safetensors").read_bytes() == model
+    assert (work / "config.json").read_bytes() == config
+    assert sorted(p.name for p in work.iterdir()) == ["config.json", "model.safetensors"]
+    detach(sess)  # la séance n'est pas bloquée : le détachement se refait
+    assert lm_head.detach_event(harness.read_journal(sess["dir"])) is not None

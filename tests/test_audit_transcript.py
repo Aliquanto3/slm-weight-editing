@@ -993,7 +993,9 @@ def test_rendered_instructions_have_no_shell_metacharacter_templates(name, cuda)
         if line.strip().startswith("uv run")
     ]
     subs = {c.split("slm-weight-editing ")[1].split()[0] for c in commands}
-    assert subs == {*audit.ALLOWED_SUBCOMMANDS}, commands
+    assert subs == {"run-batch", "session-status", "run-script", "probe", "detach-lm-head"}, (
+        commands
+    )
     assert {"--thinking on", "--thinking off"} <= {
         m for c in commands for m in re.findall(r"--thinking \w+", c)
     }

@@ -217,6 +217,35 @@ def _known_config(original: Path, detached: dict | None) -> dict | None:
     return cfg
 
 
+def _check_detached_config(original: Path, work: Path, detached: dict | None) -> dict | None:
+    """Config du détachement, vérifiée : rejouable sur l'original et toujours déliée dans work/.
+
+    Sinon le modèle publié par apply-diff (config déliée) ne serait pas celui mesuré pendant la
+    séance (lots tournés avec `lm_head` ignoré si work/ est relié) : gel refusé.
+    """
+    if detached is None:
+        return None
+    known = _known_config(original, detached)
+    if known is None:
+        raise FreezeError(
+            f"{detached['config']['path']} de l'original ne redonne pas la transformation "
+            "journalisée par detach-lm-head : diff non rejouable, gel refusé"
+        )
+    path = work / known["path"]
+    try:
+        text = path.read_text("utf-8")
+        untied, _ = transform_config(text)
+        still_untied = json.loads(untied) == json.loads(text)
+    except OSError, ValueError, HarnessError:
+        still_untied = False
+    if not still_untied:
+        raise FreezeError(
+            f"work/{known['path']} ne déclare plus tie_word_embeddings: false après "
+            "detach-lm-head : le modèle mesuré ignorait lm_head, gel refusé"
+        )
+    return known
+
+
 def _detached_field(detached: dict | None) -> dict | None:
     """Champ `detached_lm_head` de diff.json (source, nom et transformation de la config)."""
     if detached is None:
@@ -336,9 +365,8 @@ def _freeze_locked(directory: Path, session_id: str, original: Path, out) -> dic
     detached = detach_event(journal)
     parts = compute_tensor_diff(open_checkpoint(original), open_checkpoint(work), detached)
     work_files = harness.work_file_hashes(work)
-    files = changed_files(
-        opened["base_files_sha256"], work_files, _known_config(original, detached)
-    )
+    known = _check_detached_config(original, work, detached)
+    files = changed_files(opened["base_files_sha256"], work_files, known)
 
     # 3. Gel (verrou déjà tenu : aucun lot ne peut démarrer), puis work/ doit être resté
     # identique à ce qui a été comparé (l'éditeur écrit work/ sans passer par le verrou).

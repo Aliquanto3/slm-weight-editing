@@ -92,8 +92,20 @@ def transform_config(text: str) -> tuple[str, list[str]]:
     return json.dumps(data, indent=2, ensure_ascii=False) + "\n", keys
 
 
-def append_tensor(path: Path, name: str, dtype: str, shape: list[int], data: bytes) -> None:
-    """Réécrit un fichier safetensors avec un tenseur de plus en fin de données (atomique)."""
+def append_tensor(
+    path: Path,
+    name: str,
+    dtype: str,
+    shape: list[int],
+    data: bytes,
+    *,
+    backup: Path | None = None,
+) -> None:
+    """Réécrit un fichier safetensors avec un tenseur de plus en fin de données (atomique).
+
+    `backup` : l'ancien fichier y est déplacé (renommage) juste avant le remplacement, pour
+    pouvoir annuler l'opération.
+    """
     tmp = path.with_name(path.name + ".tmp")
     try:
         with path.open("rb") as f:
@@ -115,14 +127,20 @@ def append_tensor(path: Path, name: str, dtype: str, shape: list[int], data: byt
                 f.seek(data_start)
                 shutil.copyfileobj(f, out, _COPY_CHUNK)
                 out.write(data)
+        if backup is not None:
+            os.replace(path, backup)
         os.replace(tmp, path)
     finally:
         tmp.unlink(missing_ok=True)
 
 
 def write_config(path: Path, text: str) -> None:
+    write_config_bytes(path, text.encode("utf-8"))
+
+
+def write_config_bytes(path: Path, data: bytes) -> None:
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text, "utf-8", newline="\n")
+    tmp.write_bytes(data)
     os.replace(tmp, path)
 
 
@@ -159,32 +177,51 @@ def detach_lm_head(
             raise HarnessError(
                 f"embeddings non liés : {CONFIG_FILE} ne déclare pas {TIE_KEY}: true"
             )
+        journal = harness.read_journal(directory)
+        opened = next((e for e in journal if e.get("event") == "open"), {})
+        base_sha = opened.get("base_files_sha256", {}).get(CONFIG_FILE)
+        if base_sha is not None and base_sha != _sha(config_bytes):
+            # Le gel ne pourrait pas rejouer la transformation sur la config de la base.
+            raise HarnessError(
+                f"{CONFIG_FILE} de work/ modifié depuis l'ouverture : détachement refusé"
+            )
         embed = index[embed_name]
         raw = embed.read_bytes()
         file_before = harness._sha256_file(embed.path)
         new_text, keys = transform_config(config_bytes.decode("utf-8"))
-        append_tensor(embed.path, LM_HEAD, embed.dtype, list(embed.shape), raw)
-        write_config(config, new_text)
-        entry = {
-            "event": EVENT,
-            "at": harness._now(),
-            "source": embed_name,
-            "lm_head": LM_HEAD,
-            "shape": list(embed.shape),
-            "dtype": embed.dtype,
-            "embed_sha256": _sha(raw),
-            "lm_head_sha256": _sha(open_checkpoint(work)[LM_HEAD].read_bytes()),
-            "file": embed.path.name,
-            "file_sha256_before": file_before,
-            "file_sha256_after": harness._sha256_file(embed.path),
-            "config": {
-                "path": CONFIG_FILE,
-                "sha256_before": _sha(config_bytes),
-                "sha256_after": _sha(new_text.encode("utf-8")),
-                "keys": keys,
-            },
-        }
-        harness._append_journal(directory, entry)
+        backup = embed.path.with_name(embed.path.name + ".detach-bak")
+        # Tenseur, config et journal : une erreur entre deux écritures remet work/ en l'état,
+        # sinon la séance resterait déliée sans ligne au journal (refusée au gel et au détachement).
+        try:
+            append_tensor(embed.path, LM_HEAD, embed.dtype, list(embed.shape), raw, backup=backup)
+            write_config(config, new_text)
+            entry = {
+                "event": EVENT,
+                "at": harness._now(),
+                "source": embed_name,
+                "lm_head": LM_HEAD,
+                "shape": list(embed.shape),
+                "dtype": embed.dtype,
+                "embed_sha256": _sha(raw),
+                "lm_head_sha256": _sha(open_checkpoint(work)[LM_HEAD].read_bytes()),
+                "file": embed.path.name,
+                "file_sha256_before": file_before,
+                "file_sha256_after": harness._sha256_file(embed.path),
+                "config": {
+                    "path": CONFIG_FILE,
+                    "sha256_before": _sha(config_bytes),
+                    "sha256_after": _sha(new_text.encode("utf-8")),
+                    "keys": keys,
+                },
+            }
+            harness._append_journal(directory, entry)
+        except BaseException:
+            if backup.exists():
+                os.replace(backup, embed.path)
+            if config.read_bytes() != config_bytes:
+                write_config_bytes(config, config_bytes)
+            raise
+        backup.unlink(missing_ok=True)
         return entry
 
 

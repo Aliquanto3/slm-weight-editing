@@ -94,3 +94,16 @@ Codée sans attendre l'essai Ollama de 2.7 (décision 5) : la commande ne sert e
 - `test_report_embed_refuses_a_distinct_lm_head` et les deux autres tests du cas lié sont inchangés et verts (sans diff détaché, `lm_head` reste refusé) ; seul `gguf_name("lm_head.weight")` change de valeur.
 - Le nom du tenseur dans le GGUF est celui de la copie de `token_embd` ; le report ne vérifie pas un `lm_head` hors racine (`model.lm_head.weight` refusé).
 - Non fait : le rapport réel sur le blob officiel et l'essai Ollama (à Anaël) ; mesure de taille et de temps de réponse de la décision 5.
+
+## Revue
+
+### Passe 1 (2026-11-06, SHA revu 90cccf8)
+
+Base à jour (main a691faa). Tests ciblés : lm_head, freeze, audit_transcript, session_workspace, report_gguf, harness, compare_edits, gguf_add_output verts (invariants 10 / 28 / 73 inclus) ; les trois tests ajoutés échouent sur 90cccf8.
+
+- Important · medium · second avis 1 · corrigé : un `work/config.json` relié (`tie_word_embeddings: true`) après le détachement passait le gel ; le diff publiait une config déliée alors que les lots mesurés ignoraient `lm_head`. Le gel refuse désormais une config de `work/` qui n'est plus déliée (`_check_detached_config`). Test `test_config_relinked_after_detach_is_refused_at_freeze`.
+- Important · medium · second avis 2 · corrigé : tenseur, config et journal écrits sans reprise ; une erreur entre deux bloquait la séance (detach « déjà délié », gel « tenseur en trop »). Le fichier d'origine est gardé par renommage (`.detach-bak`) et work/ est restauré en cas d'erreur avant la ligne de journal. Reste une fenêtre entre deux renommages si le processus est tué. Test `test_detach_interrupted_before_the_journal_line_restores_work`.
+- Important · low → medium · second avis 3 · corrigé : un `config.json` modifié avant le détachement donnait un diff que le gel produisait mais qu'apply-diff refusait de rejouer. `detach-lm-head` refuse une config qui diffère de la base à l'ouverture, et le gel refuse un détachement dont la transformation ne se rejoue pas sur l'original. Test `test_detach_refuses_a_config_modified_since_open`.
+- Rejeté · low · second avis 4 : « s'il existe » du critère 1 porte sur `text_config`, pas sur la clé ; écrire `text_config.tie_word_embeddings: false` dès que `text_config` existe est le comportement demandé (et le plus sûr pour Qwen3.5).
+- Nit · low · second avis 5 · corrigé : la comparaison n'était pas tautologique (elle confrontait la consigne rendue à la liste blanche), mais elle suivait la constante ; liste écrite en dur.
+- Complexité : 0 constat (pas de structure qui grossit parcourue à chaque événement en plus de l'existant).
