@@ -296,10 +296,11 @@ def public_path(value: str) -> str:
 def public_journal(raw: bytes) -> bytes:
     """Journal publiable : chemins locaux masqués, dossier personnel remplacé par `~`."""
     lines = []
-    for line in raw.decode("utf-8").splitlines():
-        if not line.strip():
-            continue
-        entry = json.loads(line)
+    try:
+        entries = [json.loads(line) for line in raw.decode("utf-8").splitlines() if line.strip()]
+    except ValueError as exc:
+        raise harness.journal_unreadable(exc) from exc
+    for entry in entries:
         for key in _PATH_FIELDS:
             if isinstance(entry.get(key), str):
                 entry[key] = public_path(entry[key])

@@ -256,6 +256,8 @@ def recover_detach(directory: Path) -> str | None:
 
     try:
         message = lm_head.recover_interrupted(directory)
+    except RecoveryError:
+        raise
     except ValueError as exc:  # journal illisible (ligne tronquée, non UTF-8) : rien n'est touché
         raise RecoveryError(
             f"reprise du détachement de lm_head impossible : {JOURNAL_FILE} illisible "
@@ -340,7 +342,18 @@ def read_journal(directory: str | Path) -> list[dict]:
     path = Path(directory) / JOURNAL_FILE
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text("utf-8").splitlines() if line.strip()]
+    try:
+        return [json.loads(line) for line in path.read_text("utf-8").splitlines() if line.strip()]
+    except ValueError as exc:  # ligne tronquée ou non UTF-8
+        raise journal_unreadable(exc) from exc
+
+
+def journal_unreadable(exc: Exception) -> RecoveryError:
+    """Erreur claire pour un journal illisible : rien n'est modifié sur disque."""
+    return RecoveryError(
+        f"{JOURNAL_FILE} illisible ({type(exc).__name__}) : séance laissée telle quelle, "
+        "rien n'est modifié"
+    )
 
 
 def used_batches(directory: str | Path, state: SessionState | None = None) -> int:

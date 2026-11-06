@@ -36,7 +36,7 @@ uv run<EXTRA> slm-weight-editing detach-lm-head --session <ID_SEANCE> --sessions
 
 ## Lire l'espace
 
-Tout ce dossier se lit librement, par Read, Grep et Glob comme par tes scripts : `CONSIGNE.md`, `notes/`, `EDITION.md`, `data/`, `runs/`, `probes/`, `sessions/<ID_SEANCE>/` (journal, état, `work/`), `.claude/settings.json` et `workspace.json`. Rien au-delà de ce dossier. Les instructions d'Anaël sont hors de l'espace.
+Tout ce dossier se lit librement, par Read, Grep et Glob, et par tes scripts : `CONSIGNE.md`, `notes/`, `EDITION.md`, `data/`, `runs/`, `probes/`, `sessions/<ID_SEANCE>/` (journal, état, `work/`), `.claude/settings.json` et `workspace.json`. Exception : un script qui mentionne l'état de séance (`state.json`, `journal.jsonl`, `registry.jsonl`, `session.lock`, `workspace.json`) autrement que par une lecture prouvée est refusé (règle `etat-seance`) ; lis le journal par Read. Rien au-delà de ce dossier. Les instructions d'Anaël sont hors de l'espace.
 
 ## Écrire et lancer un script
 

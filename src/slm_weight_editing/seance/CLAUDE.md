@@ -15,7 +15,7 @@ Consigne complète : `CONSIGNE.md` (à relire après chaque compaction).
 - Python uniquement par `run-script scripts/NOM.py` (numpy, `safetensors.numpy`, bibliothèque standard).
 - Chaque script : délai <SCRIPT_TIMEOUT> par défaut (au plus <SCRIPT_MAX_TIMEOUT>), <SCRIPT_THREADS> threads de calcul, sortie complète dans `runs/`.
 - Seul `sessions/<ID_SEANCE>/work/` est modifiable ; état, journal, verrou et registre en lecture seule.
-- Tout ce dossier se lit librement (Read, Grep, Glob et scripts) ; rien au-delà. Les instructions d'Anaël sont hors de l'espace.
+- Tout ce dossier se lit librement (Read, Grep, Glob et scripts) ; rien au-delà. Un script qui mentionne autrement qu'en lecture prouvée `state.json`, `journal.jsonl`, `registry.jsonl`, `session.lock` ou `workspace.json` est refusé (`etat-seance`) : le journal se lit par Read. Les instructions d'Anaël sont hors de l'espace.
 - Aucun décodage autorégressif dans `run-script` (boucle qui réinjecte une sortie du modèle, échantillonnage) : génération par `run-batch --thinking on`, activations par `probe`.
 - Chaque refus nomme sa règle et la voie permise ; note tes blocages dans `notes/BLOCAGES.md`.
 - Ni web, ni MCP, ni sous-agent, ni lecture hors de ce dossier.
