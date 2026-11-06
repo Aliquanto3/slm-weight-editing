@@ -74,3 +74,21 @@
     report-gguf refuse aujourd'hui un output.weight (_check_tied, fix-report-embed.md) : adapter
     sans affaiblir le contrôle pour le cas lié. Témoin : output.weight égal à token_embd avant
     édition. Réaligner test_report_gguf.py, test_freeze.py et test_compare_edits.py.
+- id: "9"
+  title: Durcissement des frontières 2.5/2.6/2.8
+  description: >-
+    Constats A-12 de la rétro de l'Epic 2 (CAP-6, CAP-9, CAP-10) : fiche
+    story-2-9-durcissement-frontieres.md, fusionnée par la PR #38.
+- id: "10"
+  title: Consigne de lecture de l'état de séance et lectures du journal sans message clair
+  description: >-
+    Reports de la story 2.9. (1) CONSIGNE.md l. 39 (et seance/CLAUDE.md l. 18) : « tout ce dossier
+    se lit librement… par tes scripts » reste vrai pour les lectures prouvées par l'AST, mais ne dit
+    pas qu'un script qui mentionne autrement l'état de séance (state.json, journal.jsonl,
+    registry.jsonl, session.lock, workspace.json) est refusé (etat-seance) ; le journal se lit par
+    Read. (2) Les lectures du journal hors reprise (used_batches, gel) lèvent encore une
+    JSONDecodeError brute sur un journal illisible : leur donner le message clair de
+    harness.RecoveryError (HarnessError), sans rien modifier sur disque.
+  invoke_dev_with: >-
+    Petite story : doc de séance + message d'erreur. Réaligner les tests qui citent le texte de
+    CONSIGNE.md, s'il y en a ; test paramétré journal illisible sur used_batches et session-freeze.
