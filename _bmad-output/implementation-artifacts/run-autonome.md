@@ -19,6 +19,8 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 - Points d'arrêt (consigne d'Anaël du 2026-11-05) : relecture de la spec par Anaël avant 2.4, 2.5, 2.6 et 2.8 (`spec_checkpoint`) ; arrêt après 2.7 pour l'essai Ollama d'Anaël (`done_checkpoint`). Si l'essai échoue, CAP-10 et 2.8 sortent de s2.
 - Levée d'un point d'arrêt (A-10 de la rétro de l'Epic 2, pour les runs suivants) : elle ne délègue pas les questions de protocole, de méthode ou de publication. L'orchestrateur ne tranche que les questions techniques ; les autres vont dans `decisions-a-confirmer.md` (question, story, réponse proposée), qu'Anaël valide avant la fusion de la story concernée.
 - Release (A-7) : seulement après une CI verte de `main` sur le commit tagué, vérifiée par `gh run watch <id> --interval 60`.
+- Story à risque (A-5 de la rétro de l'Epic 2, pour les runs suivants) : toute story qui modifie une des trois couches (réglages, crochet de refus, audit) a une fiche relue par Anaël avant le code, un dev-story sur Opus (paramètre `model`) et une batterie de cas légitimes et illégitimes écrite dans la fiche.
+- Story à état persistant (A-6, pour les runs suivants) : si elle écrit sous `work/`, dans le journal ou dans le gel, sa fiche fixe la reprise après interruption (état laissé, commande de reprise, test) avant le code.
 - Fichiers d'état du run : jamais dans une PR de story, PR `chore/etat-run-*` à part.
 - Suite complète : la CI de branche (trois OS) sert de porte de fusion. Attente : `gh run watch <id> --interval 60`.
 - Aucun Ollama, aucun téléchargement de modèle, aucune séance d'édition lancés par un agent.
@@ -175,3 +177,4 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 - 2026-11-07 · 2.10 · second-avis · 1 medium, 4 low ; ~8 h bloqué sur deux tâches de fond lancées par lui-même · —
 - 2026-11-07 · 2.10 · review · passe 1 : medium (message de reprise de recover_detach) et 3 low corrigés, 1 low rejeté ; correctif relu par l'orchestrateur au lieu d'une passe 2 · f16e0e3
 - 2026-11-07 07:03 · 2.10 · fusion · PR #40 MERGED après CI verte des trois OS ; A-12 en done · d57a2c1
+- 2026-11-07 07:40 · run · décision · rétro de l'Epic 2 : A-5 (story à risque) et A-6 (reprise fixée dans la fiche) ajoutées aux règles ; A-8 : limite « rejeu de s1 non fait » ajoutée à la release v0.2.0, rejeu par Anaël en attente · —

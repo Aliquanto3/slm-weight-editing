@@ -1,6 +1,6 @@
 # Statuts des epics 1 (spec-slm-weight-editing) et 2 (spec-harnais-v2) ; id N de stories.yaml = story E.N. Mis à jour par l orchestrateur du run.
 generated: 2026-11-04 08:48
-last_updated: 2026-11-06 22:30
+last_updated: 2026-11-07 07:40
 project: slm-weight-editing
 tracking_system: file-system
 story_location: _bmad-output/specs/spec-slm-weight-editing
@@ -59,14 +59,14 @@ action_items:
     action: "A-5 Story à risque pour toute story qui touche réglages, crochet ou audit
       : fiche relue, dev Opus, batterie de cas dans la fiche"
     owner: "orchestrateur"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-11-06.md"
   - id: "epic-2-retro-item-6-a-6-fiche-d-une-story-à-état-persistant"
     epic: 2
     action: "A-6 Fiche d une story à état persistant : reprise après interruption
       fixée avant le code"
     owner: "rédacteur des fiches"
-    status: open
+    status: done
     ref: "_bmad-output/implementation-artifacts/epic-2-retro-2026-11-06.md"
   - id: "epic-2-retro-item-7-a-7-release-seulement-après-ci-verte-de"
     epic: 2
