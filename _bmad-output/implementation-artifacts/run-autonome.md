@@ -171,3 +171,7 @@ Plafond global : 5 agents actifs à la fois sous Windows.
 - 2026-11-06 06:45 · run · ménage · worktrees wt-2-4, wt-2-5, wt-2-6, wt-2-8, wt-doc25, wt-res27 retirés, branches locales fusionnées supprimées ; branches distantes soumises à Anaël · cd23d51
 - 2026-11-06 06:52 · run · CI · rouge (test_probe, les 3 tests d'égalité bit à bit, ubuntu ; run 42170697097 sur main après la fusion de #32, noté a posteriori, A-13) · f46c604
 - 2026-11-06 17:52 · run · décision · rétro de l'Epic 2 : A-7 (release après CI verte de main, AGENTS.md et modèle de run du kit), A-10 (decisions-a-confirmer.md, modèle de run du kit), A-13 (CI rouges rattrapées au journal, fiches 2.1 à 2.8 en done) · —
+- 2026-11-06 · 2.10 · dev · fini, sans cadrage BMAD (petite story), suite verte · 99c9fdc
+- 2026-11-07 · 2.10 · second-avis · 1 medium, 4 low ; ~8 h bloqué sur deux tâches de fond lancées par lui-même · —
+- 2026-11-07 · 2.10 · review · passe 1 : medium (message de reprise de recover_detach) et 3 low corrigés, 1 low rejeté ; correctif relu par l'orchestrateur au lieu d'une passe 2 · f16e0e3
+- 2026-11-07 07:03 · 2.10 · fusion · PR #40 MERGED après CI verte des trois OS ; A-12 en done · d57a2c1
