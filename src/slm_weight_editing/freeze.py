@@ -296,10 +296,7 @@ def public_path(value: str) -> str:
 def public_journal(raw: bytes) -> bytes:
     """Journal publiable : chemins locaux masqués, dossier personnel remplacé par `~`."""
     lines = []
-    for line in raw.decode("utf-8").splitlines():
-        if not line.strip():
-            continue
-        entry = json.loads(line)
+    for entry in harness.parse_journal(raw):
         for key in _PATH_FIELDS:
             if isinstance(entry.get(key), str):
                 entry[key] = public_path(entry[key])
@@ -371,6 +368,8 @@ def _freeze_locked(directory: Path, session_id: str, original: Path, out) -> dic
 
     # 3. Gel (verrou déjà tenu : aucun lot ne peut démarrer), puis work/ doit être resté
     # identique à ce qui a été comparé (l'éditeur écrit work/ sans passer par le verrou).
+    # Journal publiable calculé avant le gel : illisible, rien n'est figé.
+    public = public_journal((directory / harness.JOURNAL_FILE).read_bytes())
     _freeze_state(directory)
     resume = "séance déjà gelée, relancer session-freeze pour écrire le diff"
     expected = dict(want) | {e["name"]: e["sha256_after"] for e, _, _ in parts}
@@ -380,7 +379,6 @@ def _freeze_locked(directory: Path, session_id: str, original: Path, out) -> dic
     try:
         entries, values = _pack_values(parts)
         out_dir.mkdir(parents=True, exist_ok=True)
-        public = public_journal((directory / harness.JOURNAL_FILE).read_bytes())
         journal_sha = _sha(public)
         state = harness.read_state(directory)
         blocages = _public_blocages(directory)

@@ -675,7 +675,8 @@ def test_review_unreadable_journal_at_recovery_is_a_clear_refusal(sess, command)
     journal.write_bytes(journal.read_bytes() + b'{"event": "detach_lm_he')
     if command == "unlock-verrou-mort":
         _dead_lock(sess["dir"])
-    with pytest.raises(harness.RecoveryError, match="illisible"):
+    # Message propre de la reprise (story 2.10) : detach-bak/ reste à traiter par l'opérateur.
+    with pytest.raises(harness.RecoveryError, match=rf"reprise .* {lm_head.BACKUP_DIR}/"):
         if command == "run-batch":
             data = sess["root"] / "x-train.jsonl"
             harness.run_batch(
