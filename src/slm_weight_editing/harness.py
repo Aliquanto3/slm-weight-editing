@@ -256,9 +256,7 @@ def recover_detach(directory: Path) -> str | None:
 
     try:
         message = lm_head.recover_interrupted(directory)
-    except RecoveryError:
-        raise
-    except ValueError as exc:  # journal illisible (ligne tronquée, non UTF-8) : rien n'est touché
+    except (ValueError, JournalUnreadableError) as exc:  # journal illisible : rien n'est touché
         raise RecoveryError(
             f"reprise du détachement de lm_head impossible : {JOURNAL_FILE} illisible "
             f"({type(exc).__name__}) ; work/ et {lm_head.BACKUP_DIR}/ laissés tels quels"
@@ -342,15 +340,28 @@ def read_journal(directory: str | Path) -> list[dict]:
     path = Path(directory) / JOURNAL_FILE
     if not path.exists():
         return []
+    return parse_journal(path.read_bytes())
+
+
+class JournalUnreadableError(RecoveryError):
+    """Journal illisible (ligne tronquée, non UTF-8, ligne qui n'est pas un objet JSON)."""
+
+
+def parse_journal(raw: bytes) -> list[dict]:
+    """Lignes du journal ; `JournalUnreadableError` claire si l'une est illisible."""
     try:
-        return [json.loads(line) for line in path.read_text("utf-8").splitlines() if line.strip()]
+        entries = [json.loads(line) for line in raw.decode("utf-8").splitlines() if line.strip()]
     except ValueError as exc:  # ligne tronquée ou non UTF-8
         raise journal_unreadable(exc) from exc
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise journal_unreadable(TypeError(f"ligne {type(entry).__name__}, objet attendu"))
+    return entries
 
 
-def journal_unreadable(exc: Exception) -> RecoveryError:
+def journal_unreadable(exc: Exception) -> JournalUnreadableError:
     """Erreur claire pour un journal illisible : rien n'est modifié sur disque."""
-    return RecoveryError(
+    return JournalUnreadableError(
         f"{JOURNAL_FILE} illisible ({type(exc).__name__}) : séance laissée telle quelle, "
         "rien n'est modifié"
     )

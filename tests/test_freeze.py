@@ -722,17 +722,27 @@ def _snapshot(directory: Path) -> dict[str, bytes]:
     }
 
 
-@pytest.mark.parametrize("corruption", [b'{"event": "ope', b"\xff\xfe\x00 pas de l'utf-8\n"])
-@pytest.mark.parametrize("action", ["used_batches", "session-freeze"])
+@pytest.mark.parametrize(
+    "corruption",
+    [b'{"event": "ope', b"\xff\xfe\x00 pas de l'utf-8\n", b"5\n", b"[1]\n", b"null\n"],
+)
+@pytest.mark.parametrize("action", ["used_batches", "used_probe_tokens", "session-freeze"])
 def test_unreadable_journal_gives_clear_error_and_touches_nothing(sess, action, corruption):
     journal = sess["dir"] / harness.JOURNAL_FILE
     journal.write_bytes(journal.read_bytes() + corruption)
-    before = _snapshot(sess["dir"])
+    before = _snapshot(sess["root"])
     with pytest.raises(harness.RecoveryError, match=r"journal\.jsonl illisible \(\w+Error\)") as ei:
         if action == "used_batches":
             harness.used_batches(sess["dir"])
+        elif action == "used_probe_tokens":
+            harness.used_probe_tokens(sess["dir"])
         else:
             freeze_it(sess)
     assert isinstance(ei.value, HarnessError)
     assert "rien n'est modifié" in str(ei.value)
-    assert _snapshot(sess["dir"]) == before
+    assert _snapshot(sess["root"]) == before
+
+
+def test_public_journal_refuses_a_line_that_is_not_an_object():
+    with pytest.raises(harness.RecoveryError, match=r"illisible \(TypeError\)"):
+        freeze.public_journal(b'{"event": "open"}\n5\n')
