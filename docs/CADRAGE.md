@@ -77,6 +77,39 @@ Relevé du 2026-11-04, source : `benchmarks/quality/<campagne>/summary.json` de 
 
 Au-delà de 2,5 Md, `qwen3.5:4b` (40,4 % en think_on) et `granite4.2:3b` (36,0 %) gardent le même défaut. Le banc ne mesure pas encore par réponse la langue, le format ni la fuite du raisonnement dans la réponse (critère de langue différé) : les autres défauts devront d'abord y être instrumentés.
 
+## Sources à exploiter
+
+Relevé du 2026-11-14. Deux travaux parus après le cadrage, pas encore exploités. Rien n'est décidé.
+
+### Édition en forme close d'une décision (embedding.in)
+
+« [A decision skill written into the weights](https://www.embedding.in/blog/a-decision-skill-written-into-the-weights) », sur Qwen3.5-0.8B. Un [notebook Kaggle](https://www.kaggle.com/code/nandakishorconvai/fast-edits-decision-model?scriptVersionId=367932959) l'accompagne probablement : il n'a pas pu être lu, à vérifier.
+
+- **Méthode** : résolution linéaire de type MEMIT, sans gradient, sur la matrice de sortie du MLP de la couche 23 sur 24 (256 colonnes sur 3 584, 262 000 poids). La cible est une décision (quel outil appeler, est-on prêt à agir), pas un fait. L'édition est calculée à partir d'un petit modèle enseignant ajusté sur 300 lignes annotées : ce n'est pas un LLM qui raisonne sur les poids.
+- **Résultats déclarés** (93 requêtes réservées) : choix d'outil de 80 à 93,5 %, « prêt à agir » de 18 à 97,8 %. Un LoRA de rang 16 atteint 100 % sur les deux, mais déborde sur environ 5 prompts sans rapport sur 15, contre 1 pour l'édition.
+- **Limites déclarées** : l'édition ne tient pas à la reformulation du prompt (5 cas sur 11, contre 8 sans édition) ; elle n'a pas réduit les boucles de raisonnement ; une seule tâche, petits jeux de test.
+- **À reprendre** :
+  - un terme de protection avec plafond de KL (0,03) sur du texte à préserver ; sans lui, la perplexité WikiText explose ;
+  - un témoin « édition aléatoire de même taille » ;
+  - une comparaison à LoRA sur les mêmes données ;
+  - des mesures d'oubli hors banc (perplexité, ARC-Easy) ;
+  - un test de reformulation du prompt pour chaque édition.
+- **Lecture pour ce dépôt** : décisions et comportements semblent demander des éditions différentes. Une méthode en forme close serait un point de comparaison pour les séances de Claude, pas un remplacement.
+
+### Réplication sur un autre modèle et un autre défaut (LFM2.5-350M)
+
+[`yasserrmd/LFM2.5-350M-JSON-NoFence`](https://huggingface.co/yasserrmd/LFM2.5-350M-JSON-NoFence), Mohamed Yasser, novembre 2026, d'après le billet du MIT.
+
+- **Défaut visé** : le modèle entoure son JSON de clôtures markdown quand on demande du JSON seul.
+- **Édition** : projection de rang 1 sur deux tenseurs (`layers.14.feed_forward.w2` et `layers.15.conv.out_proj`), 125 566 entrées, soit 0,0354 % du modèle, sans gradient. La carte ne dit ni qui a trouvé la direction, ni avec combien de passes, et ne donne pas de code.
+- **Résultats déclarés** (12 prompts inédits, 48 réponses) : JSON strict de 1/48 à 28/48, clôtures de 41/48 à 0/48, perplexité inchangée (44,54 contre 44,58), 27 réponses corrigées et 0 dégradée (McNemar exact, p = 1,5e-8). Trois éditions aléatoires de même taille ne changent rien.
+- **Limites déclarées** : prompts en anglais, un seul style de prompt ; régression sur les tableaux JSON de premier niveau (0/16) ; l'édition corrige une habitude de mise en forme, sans ajouter de capacité.
+- **À reprendre** :
+  - le défaut de format comme deuxième cible, après les boucles. Il a une signature mesurable sur des données d'entraînement, ce que demandent les questions ouvertes ci-dessous ; le banc doit d'abord l'instrumenter ;
+  - le patch publié à part, pour audit et annulation bit à bit ;
+  - les éditions aléatoires en témoin et le test de McNemar sur réponses appariées.
+- **Réserve** : Granite 4.0 350M a été écarté plus haut parce qu'il boucle peu. Ce résultat montre qu'un modèle de 350 M peut être édité sur un défaut de format : l'exclusion vaut pour les boucles, pas pour tous les défauts.
+
 ## Questions ouvertes
 
 - **Matériel** : tranché le 2026-11-04 : la tour RTX 3050 pour les séances, avec torch CUDA (extra `cuda`) et le harnais transformers. Un GPU loué seulement pour le lot 2 bis.
